@@ -140,6 +140,37 @@
     </section>
 
 
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Phase 3: Traffic Flow Forecasting</h2>
+        <div class="button-row">
+          <button onclick="runForecast('historical_average')">Run historical-average forecast</button>
+          <button onclick="runForecast('gradient_boosting')">Run gradient-boosting forecast</button>
+          <a class="button-link" href="/api/export/forecast-results.csv">Export forecast CSV</a>
+        </div>
+      </div>
+      <p class="hint">Forecasts are generated for 15, 30, and 60 minutes ahead by approach. The historical-average model is transparent and robust for limited data; gradient boosting is used when enough records exist.</p>
+      <pre id="forecastRunResult"></pre>
+      <h3>Back-test Metrics</h3>
+      <table id="forecastEvaluationTable"></table>
+      <h3>Latest Forecast Results</h3>
+      <table id="forecastResultsTable"></table>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Phase 3: Signal Timing Recommendations</h2>
+        <div class="button-row">
+          <button onclick="generateRecommendations()">Generate recommendations</button>
+          <a class="button-link" href="/api/export/signal-recommendations.csv">Export recommendation CSV</a>
+        </div>
+      </div>
+      <p class="hint"><strong>Evaluation only:</strong> these recommendations are decision-support outputs and are not connected to GAM's operational traffic signal control system.</p>
+      <pre id="recommendationRunResult"></pre>
+      <table id="recommendationTable"></table>
+    </section>
+
     <section class="panel">
       <div class="panel-title">
         <h2>Ingestion Files</h2>

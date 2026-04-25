@@ -7,3 +7,4 @@ pandas==2.2.3
 numpy==2.2.1
 opencv-python-headless==4.10.0.84
 pydantic==2.10.4
+scikit-learn==1.6.0

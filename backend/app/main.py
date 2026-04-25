@@ -16,6 +16,8 @@ from .database import get_db
 from .services.detector_log_parser import parse_detector_log
 from .services.signal_log_parser import parse_signal_log
 from .services.video_probe import probe_video
+from .services.forecasting import evaluate_forecast_models, generate_forecasts
+from .services.recommendation import generate_signal_recommendations
 
 app = FastAPI(title=APP_TITLE, version="0.1.0")
 app.add_middleware(
@@ -497,3 +499,110 @@ def export_detector_counts(db: Annotated[Session, Depends(get_db)]):
 def export_hourly_summary(db: Annotated[Session, Depends(get_db)]):
     rows = hourly_summary(db)
     return _csv_response("hourly_summary.csv", ["hour_start", "approach_no", "total_count", "avg_15min_count", "interval_records"], rows)
+#test
+
+# ---- Phase 3: Traffic flow forecasting and signal timing recommendations ----
+
+def _parse_horizons(horizons: str) -> list[int]:
+    values: list[int] = []
+    for part in horizons.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            h = int(part)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Horizons must be comma-separated integers, e.g. 15,30,60") from exc
+        if h <= 0 or h % 15 != 0:
+            raise HTTPException(status_code=400, detail="Each horizon must be a positive multiple of 15 minutes.")
+        values.append(h)
+    return values or [15, 30, 60]
+
+@app.post("/api/forecast/run")
+def run_forecast(db: Annotated[Session, Depends(get_db)], horizons: str = "15,30,60", model_name: str = "historical_average"):
+    if model_name not in {"historical_average", "gradient_boosting"}:
+        raise HTTPException(status_code=400, detail="model_name must be historical_average or gradient_boosting")
+    try:
+        return generate_forecasts(db, _parse_horizons(horizons), model_name=model_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+@app.get("/api/forecast/evaluation")
+def forecast_evaluation(db: Annotated[Session, Depends(get_db)], horizons: str = "15,30,60", model_name: str = "historical_average"):
+    if model_name not in {"historical_average", "gradient_boosting"}:
+        raise HTTPException(status_code=400, detail="model_name must be historical_average or gradient_boosting")
+    metrics = evaluate_forecast_models(db, _parse_horizons(horizons), model_name=model_name)
+    return [m.__dict__ for m in metrics]
+
+@app.get("/api/forecast/results")
+def forecast_results(db: Annotated[Session, Depends(get_db)], limit: int = 200):
+    rows = db.execute(text("""
+        SELECT fr.id, fr.generated_at, fr.target_time, fr.horizon_minutes,
+               i.code AS intersection_code, fr.approach_no, fr.detector_no,
+               fr.model_name, round(fr.predicted_count::numeric, 2) AS predicted_count,
+               fr.actual_count, round(fr.mae::numeric, 2) AS mae,
+               round(fr.rmse::numeric, 2) AS rmse, round(fr.mape::numeric, 2) AS mape
+        FROM forecast_results fr
+        LEFT JOIN intersections i ON i.id = fr.intersection_id
+        ORDER BY fr.generated_at DESC, fr.horizon_minutes, fr.approach_no
+        LIMIT :limit
+    """), {"limit": limit}).mappings().all()
+    return [{**dict(r), "generated_at": r["generated_at"].isoformat(), "target_time": r["target_time"].isoformat()} for r in rows]
+
+@app.get("/api/forecast/chart")
+def forecast_chart(db: Annotated[Session, Depends(get_db)]):
+    latest_generated = db.execute(text("SELECT max(generated_at) FROM forecast_results")).scalar_one_or_none()
+    if not latest_generated:
+        return []
+    rows = db.execute(text("""
+        SELECT target_time, horizon_minutes, approach_no, predicted_count
+        FROM forecast_results
+        WHERE generated_at = :generated_at
+        ORDER BY horizon_minutes, approach_no
+    """), {"generated_at": latest_generated}).mappings().all()
+    return [{**dict(r), "target_time": r["target_time"].isoformat(), "predicted_count": float(r["predicted_count"])} for r in rows]
+
+@app.post("/api/recommendations/generate")
+def generate_recommendations(db: Annotated[Session, Depends(get_db)]):
+    try:
+        return generate_signal_recommendations(db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+@app.get("/api/recommendations")
+def recommendations(db: Annotated[Session, Depends(get_db)], limit: int = 200):
+    rows = db.execute(text("""
+        SELECT id, generated_at, target_time, phase_no, approach_no,
+               recommendation, reason, round(confidence::numeric, 3) AS confidence, status
+        FROM signal_recommendations
+        ORDER BY generated_at DESC, target_time, approach_no
+        LIMIT :limit
+    """), {"limit": limit}).mappings().all()
+    return [{**dict(r), "generated_at": r["generated_at"].isoformat(), "target_time": r["target_time"].isoformat() if r["target_time"] else None} for r in rows]
+
+@app.get("/api/export/forecast-results.csv")
+def export_forecast_results(db: Annotated[Session, Depends(get_db)]):
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT generated_at, target_time, horizon_minutes, approach_no, detector_no,
+               model_name, predicted_count, actual_count, mae, rmse, mape
+        FROM forecast_results
+        ORDER BY generated_at DESC, horizon_minutes, approach_no
+    """)).mappings().all()]
+    return _csv_response(
+        "forecast_results.csv",
+        ["generated_at", "target_time", "horizon_minutes", "approach_no", "detector_no", "model_name", "predicted_count", "actual_count", "mae", "rmse", "mape"],
+        rows,
+    )
+
+@app.get("/api/export/signal-recommendations.csv")
+def export_signal_recommendations(db: Annotated[Session, Depends(get_db)]):
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT generated_at, target_time, phase_no, approach_no, recommendation, reason, confidence, status
+        FROM signal_recommendations
+        ORDER BY generated_at DESC, target_time, approach_no
+    """)).mappings().all()]
+    return _csv_response(
+        "signal_recommendations.csv",
+        ["generated_at", "target_time", "phase_no", "approach_no", "recommendation", "reason", "confidence", "status"],
+        rows,
+    )

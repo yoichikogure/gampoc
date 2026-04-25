@@ -79,3 +79,36 @@ Phase 3 should add traffic flow forecasting and signal timing recommendation:
 3. 15 / 30 / 60-minute forecast horizons
 4. Forecast evaluation metrics
 5. Evaluation-only signal timing recommendation rules
+
+## Phase 3: Forecasting and Signal Recommendation
+
+Phase 3 adds short-term traffic demand forecasting and evaluation-only signal timing recommendations.
+
+New dashboard sections:
+
+- Phase 3: Traffic Flow Forecasting
+- Phase 3: Signal Timing Recommendations
+
+Recommended operation:
+
+1. Import SCATS detector logs.
+2. Review Phase 2 daily/hourly summaries and data quality checks.
+3. Click **Run historical-average forecast**.
+4. Review MAE/RMSE/MAPE back-test metrics.
+5. Optionally click **Run gradient-boosting forecast** when sufficient data has been imported.
+6. Click **Generate recommendations**.
+
+New API endpoints:
+
+```text
+POST /api/forecast/run?model_name=historical_average&horizons=15,30,60
+POST /api/forecast/run?model_name=gradient_boosting&horizons=15,30,60
+GET  /api/forecast/evaluation
+GET  /api/forecast/results
+POST /api/recommendations/generate
+GET  /api/recommendations
+GET  /api/export/forecast-results.csv
+GET  /api/export/signal-recommendations.csv
+```
+
+All signal recommendations are decision-support outputs only. The system does not connect to or control operational traffic signal infrastructure.

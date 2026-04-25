@@ -174,3 +174,63 @@ upload('detectorForm', '/api/import/detector-log', 'detectorResult');
 upload('signalForm', '/api/import/signal-log', 'signalResult');
 upload('videoForm', '/api/import/video', 'videoResult');
 refreshAll().catch(console.error);
+
+// ---- Phase 3: forecasting and decision-support recommendations ----
+async function runForecast(modelName = 'historical_average') {
+  const out = document.getElementById('forecastRunResult');
+  out.textContent = 'Running forecast...';
+  try {
+    const data = await api(`/api/forecast/run?model_name=${modelName}&horizons=15,30,60`, { method: 'POST' });
+    out.textContent = JSON.stringify(data, null, 2);
+    await refreshPhase3();
+  } catch (err) {
+    out.textContent = err.message;
+  }
+}
+
+async function generateRecommendations() {
+  const out = document.getElementById('recommendationRunResult');
+  out.textContent = 'Generating recommendations...';
+  try {
+    const data = await api('/api/recommendations/generate', { method: 'POST' });
+    out.textContent = JSON.stringify(data, null, 2);
+    await loadRecommendations();
+  } catch (err) {
+    out.textContent = err.message;
+  }
+}
+
+async function loadForecastEvaluation() {
+  const rows = await api('/api/forecast/evaluation?model_name=historical_average&horizons=15,30,60');
+  renderTable('forecastEvaluationTable', rows, [
+    {key:'horizon_minutes', label:'Horizon'}, {key:'model_name', label:'Model'},
+    {key:'mae', label:'MAE'}, {key:'rmse', label:'RMSE'}, {key:'mape', label:'MAPE %'},
+    {key:'test_points', label:'Test points'}, {key:'notes', label:'Notes'}
+  ]);
+}
+
+async function loadForecastResults() {
+  const rows = await api('/api/forecast/results?limit=200');
+  renderTable('forecastResultsTable', rows, [
+    {key:'generated_at', label:'Generated'}, {key:'target_time', label:'Target time'},
+    {key:'horizon_minutes', label:'Horizon'}, {key:'approach_no', label:'Approach'},
+    {key:'model_name', label:'Model'}, {key:'predicted_count', label:'Predicted count'},
+    {key:'mae', label:'MAE'}, {key:'rmse', label:'RMSE'}, {key:'mape', label:'MAPE %'}
+  ]);
+}
+
+async function loadRecommendations() {
+  const rows = await api('/api/recommendations?limit=200');
+  renderTable('recommendationTable', rows, [
+    {key:'generated_at', label:'Generated'}, {key:'target_time', label:'Target time'},
+    {key:'phase_no', label:'Phase'}, {key:'approach_no', label:'Approach'},
+    {key:'recommendation', label:'Recommendation'}, {key:'reason', label:'Reason'},
+    {key:'confidence', label:'Confidence'}, {key:'status', label:'Status'}
+  ]);
+}
+
+async function refreshPhase3() {
+  await Promise.all([loadForecastEvaluation(), loadForecastResults(), loadRecommendations()]);
+}
+
+refreshPhase3().catch(console.error);
