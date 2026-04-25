@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: gam_poc_db
+    environment:
+      POSTGRES_DB: gam_poc
+      POSTGRES_USER: gam
+      POSTGRES_PASSWORD: gam_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gam -d gam_poc"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    container_name: gam_poc_backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://gam:gam_password@db:5432/gam_poc
+      APP_TITLE: GAM Traffic AI PoC
+      LOCAL_TIMEZONE: Asia/Amman
+      DATA_ROOT: /app/data
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./frontend/static:/app/frontend/static:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:

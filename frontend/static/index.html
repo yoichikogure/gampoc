@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GAM Traffic AI PoC</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>GAM Traffic AI PoC</h1>
+      <p>Standalone local dashboard for traffic data ingestion, analytics, forecasting, and incident detection development.</p>
+    </div>
+    <div class="badge">Evaluation only — no signal control connection</div>
+  </header>
+
+  <main>
+    <section class="cards" id="summaryCards"></section>
+
+    <section class="panel">
+      <h2>Data Import</h2>
+      <div class="grid three">
+        <form id="detectorForm" class="upload-card">
+          <h3>SCATS Detector Log</h3>
+          <input type="file" name="file" accept=".txt,.log,.csv" required />
+          <button>Import detector log</button>
+          <pre id="detectorResult"></pre>
+        </form>
+        <form id="signalForm" class="upload-card">
+          <h3>Signal Timing Log</h3>
+          <input type="file" name="file" accept=".txt,.log,.csv" required />
+          <button>Import signal log</button>
+          <pre id="signalResult"></pre>
+        </form>
+        <form id="videoForm" class="upload-card">
+          <h3>Historical Video</h3>
+          <input type="file" name="file" accept="video/*" required />
+          <button>Register video</button>
+          <pre id="videoResult"></pre>
+        </form>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Traffic Count Chart</h2>
+          <button onclick="loadDetectorChart()">Refresh</button>
+        </div>
+        <canvas id="countCanvas" width="900" height="320"></canvas>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Signal Phase Summary</h2>
+          <button onclick="loadSignalSummary()">Refresh</button>
+        </div>
+        <table id="signalSummaryTable"></table>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Latest Detector Counts</h2>
+          <button onclick="loadDetectorRows()">Refresh</button>
+        </div>
+        <table id="detectorTable"></table>
+      </div>
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Latest Signal Events</h2>
+          <button onclick="loadSignalRows()">Refresh</button>
+        </div>
+        <table id="signalTable"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Ingestion Files</h2>
+        <button onclick="loadFiles()">Refresh</button>
+      </div>
+      <table id="filesTable"></table>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
