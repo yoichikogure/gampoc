@@ -82,6 +82,38 @@ CREATE TABLE IF NOT EXISTS video_sources (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+
+
+CREATE TABLE IF NOT EXISTS video_frames (
+  id BIGSERIAL PRIMARY KEY,
+  video_source_id INT NOT NULL REFERENCES video_sources(id) ON DELETE CASCADE,
+  frame_index BIGINT NOT NULL,
+  frame_time_seconds NUMERIC,
+  image_path TEXT,
+  width INT,
+  height INT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(video_source_id, frame_index)
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_detections (
+  id BIGSERIAL PRIMARY KEY,
+  video_source_id INT NOT NULL REFERENCES video_sources(id) ON DELETE CASCADE,
+  frame_index BIGINT NOT NULL,
+  frame_time_seconds NUMERIC,
+  class_name TEXT NOT NULL,
+  confidence NUMERIC,
+  bbox_x INT,
+  bbox_y INT,
+  bbox_w INT,
+  bbox_h INT,
+  detection_method TEXT NOT NULL DEFAULT 'opencv_motion_fallback',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_frames_source ON video_frames(video_source_id, frame_index);
+CREATE INDEX IF NOT EXISTS idx_vehicle_detections_source ON vehicle_detections(video_source_id, frame_index);
+
 CREATE TABLE IF NOT EXISTS incident_events (
   id BIGSERIAL PRIMARY KEY,
   event_time TIMESTAMPTZ NOT NULL DEFAULT now(),

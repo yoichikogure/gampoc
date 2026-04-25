@@ -171,6 +171,33 @@
       <table id="recommendationTable"></table>
     </section>
 
+
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Phase 4: Video Processing and Vehicle Detection</h2>
+        <div class="button-row">
+          <button onclick="loadVideos()">Refresh videos</button>
+          <a class="button-link" href="/api/export/vehicle-detections.csv">Export detections CSV</a>
+        </div>
+      </div>
+      <p class="hint">Phase 4 adds uploaded video processing, frame sampling, and a CPU-only OpenCV vehicle-candidate detector. This verifies the full video pipeline before YOLO/ONNX model weights are added for the next AI refinement.</p>
+      <table id="videoTable"></table>
+      <div class="grid two">
+        <div>
+          <h3>Sampled Frames</h3>
+          <div id="frameGallery" class="frame-gallery"></div>
+        </div>
+        <div>
+          <h3>Detection Summary</h3>
+          <table id="videoDetectionSummaryTable"></table>
+        </div>
+      </div>
+      <h3>Latest Vehicle-Candidate Detections</h3>
+      <table id="vehicleDetectionTable"></table>
+      <pre id="videoProcessResult"></pre>
+    </section>
+
     <section class="panel">
       <div class="panel-title">
         <h2>Ingestion Files</h2>

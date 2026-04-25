@@ -16,6 +16,7 @@ from .database import get_db
 from .services.detector_log_parser import parse_detector_log
 from .services.signal_log_parser import parse_signal_log
 from .services.video_probe import probe_video
+from .services.video_processing import detect_vehicle_candidates, sample_video_frames
 from .services.forecasting import evaluate_forecast_models, generate_forecasts
 from .services.recommendation import generate_signal_recommendations
 
@@ -33,6 +34,47 @@ for sub in ["input/detector_logs", "input/signal_logs", "input/videos", "output/
 
 if FRONTEND_ROOT.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_ROOT)), name="static")
+
+
+@app.on_event("startup")
+def ensure_phase4_tables():
+    # Allows Phase 4 code to run even when users reuse an existing Phase 3 database volume.
+    from sqlalchemy import create_engine
+    from .config import DATABASE_URL
+    engine = create_engine(DATABASE_URL, future=True)
+    ddl = """
+    CREATE TABLE IF NOT EXISTS video_frames (
+      id BIGSERIAL PRIMARY KEY,
+      video_source_id INT NOT NULL REFERENCES video_sources(id) ON DELETE CASCADE,
+      frame_index BIGINT NOT NULL,
+      frame_time_seconds NUMERIC,
+      image_path TEXT,
+      width INT,
+      height INT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(video_source_id, frame_index)
+    );
+    CREATE TABLE IF NOT EXISTS vehicle_detections (
+      id BIGSERIAL PRIMARY KEY,
+      video_source_id INT NOT NULL REFERENCES video_sources(id) ON DELETE CASCADE,
+      frame_index BIGINT NOT NULL,
+      frame_time_seconds NUMERIC,
+      class_name TEXT NOT NULL,
+      confidence NUMERIC,
+      bbox_x INT,
+      bbox_y INT,
+      bbox_w INT,
+      bbox_h INT,
+      detection_method TEXT NOT NULL DEFAULT 'opencv_motion_fallback',
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_video_frames_source ON video_frames(video_source_id, frame_index);
+    CREATE INDEX IF NOT EXISTS idx_vehicle_detections_source ON vehicle_detections(video_source_id, frame_index);
+    """
+    with engine.begin() as conn:
+        for stmt in [x.strip() for x in ddl.split(";") if x.strip()]:
+            conn.execute(text(stmt))
+
 
 
 def _save_upload(upload: UploadFile, target_dir: Path) -> Path:
@@ -608,5 +650,136 @@ def export_signal_recommendations(db: Annotated[Session, Depends(get_db)]):
     return _csv_response(
         "signal_recommendations.csv",
         ["generated_at", "target_time", "phase_no", "approach_no", "recommendation", "reason", "confidence", "status"],
+        rows,
+    )
+
+
+# ---- Phase 4: video ingestion, frame sampling, and vehicle-candidate detection ----
+
+@app.get("/api/videos")
+def videos(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        SELECT vs.id, vs.camera_code, vs.source_type, vs.source_uri, vs.width, vs.height,
+               round(vs.fps::numeric, 2) AS fps, round(vs.duration_seconds::numeric, 2) AS duration_seconds,
+               vs.frame_count, vs.created_at,
+               COALESCE(f.frame_samples, 0) AS frame_samples,
+               COALESCE(d.detection_count, 0) AS detection_count
+        FROM video_sources vs
+        LEFT JOIN (SELECT video_source_id, count(*) AS frame_samples FROM video_frames GROUP BY video_source_id) f
+          ON f.video_source_id = vs.id
+        LEFT JOIN (SELECT video_source_id, count(*) AS detection_count FROM vehicle_detections GROUP BY video_source_id) d
+          ON d.video_source_id = vs.id
+        ORDER BY vs.created_at DESC
+    """)).mappings().all()
+    return [{**dict(r), "created_at": r["created_at"].isoformat()} for r in rows]
+
+
+def _video_path_from_id(db: Session, video_source_id: int) -> Path:
+    row = db.execute(text("SELECT source_uri, source_type FROM video_sources WHERE id=:id"), {"id": video_source_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video source not found")
+    if row["source_type"] != "file":
+        raise HTTPException(status_code=400, detail="Phase 4 processing currently supports uploaded video files. RTSP registration will be processed in a later real-time phase.")
+    path = Path(row["source_uri"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Video file is missing on disk: {path}")
+    return path
+
+@app.post("/api/videos/{video_source_id}/sample-frames")
+def sample_frames(video_source_id: int, db: Annotated[Session, Depends(get_db)], every_seconds: float = 5.0, max_frames: int = 120):
+    video_path = _video_path_from_id(db, video_source_id)
+    out_dir = DATA_ROOT / "output" / "snapshots" / f"video_{video_source_id}"
+    samples = sample_video_frames(video_path, out_dir, every_seconds=every_seconds, max_frames=max_frames)
+    inserted = 0
+    for f in samples:
+        db.execute(text("""
+            INSERT INTO video_frames(video_source_id, frame_index, frame_time_seconds, image_path, width, height)
+            VALUES (:video_source_id, :frame_index, :frame_time_seconds, :image_path, :width, :height)
+            ON CONFLICT (video_source_id, frame_index) DO UPDATE
+            SET frame_time_seconds=EXCLUDED.frame_time_seconds, image_path=EXCLUDED.image_path,
+                width=EXCLUDED.width, height=EXCLUDED.height
+        """), {"video_source_id": video_source_id, **f.__dict__})
+        inserted += 1
+    db.commit()
+    return {"video_source_id": video_source_id, "frames_sampled": inserted, "output_dir": str(out_dir)}
+
+@app.post("/api/videos/{video_source_id}/detect-vehicles")
+def detect_vehicles(video_source_id: int, db: Annotated[Session, Depends(get_db)], every_seconds: float = 1.0, max_frames: int = 600, min_area: int = 700):
+    video_path = _video_path_from_id(db, video_source_id)
+    detections = detect_vehicle_candidates(video_path, every_seconds=every_seconds, max_frames=max_frames, min_area=min_area)
+    db.execute(text("DELETE FROM vehicle_detections WHERE video_source_id=:video_source_id"), {"video_source_id": video_source_id})
+    for d in detections:
+        db.execute(text("""
+            INSERT INTO vehicle_detections(video_source_id, frame_index, frame_time_seconds, class_name, confidence,
+                                           bbox_x, bbox_y, bbox_w, bbox_h, detection_method)
+            VALUES (:video_source_id, :frame_index, :frame_time_seconds, :class_name, :confidence,
+                    :x, :y, :w, :h, :method)
+        """), {"video_source_id": video_source_id, **d.__dict__})
+    db.commit()
+    return {"video_source_id": video_source_id, "detections_created": len(detections), "method": "opencv_motion_fallback"}
+
+@app.get("/api/videos/{video_source_id}/frames")
+def video_frames(video_source_id: int, db: Annotated[Session, Depends(get_db)], limit: int = 50):
+    rows = db.execute(text("""
+        SELECT id, video_source_id, frame_index, frame_time_seconds, image_path, width, height, created_at
+        FROM video_frames
+        WHERE video_source_id=:video_source_id
+        ORDER BY frame_index
+        LIMIT :limit
+    """), {"video_source_id": video_source_id, "limit": limit}).mappings().all()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["created_at"] = d["created_at"].isoformat()
+        d["image_url"] = f"/api/video-frames/{d['id']}/image"
+        result.append(d)
+    return result
+
+@app.get("/api/video-frames/{frame_id}/image")
+def video_frame_image(frame_id: int, db: Annotated[Session, Depends(get_db)]):
+    path = db.execute(text("SELECT image_path FROM video_frames WHERE id=:id"), {"id": frame_id}).scalar_one_or_none()
+    if not path or not Path(path).exists():
+        raise HTTPException(status_code=404, detail="Frame image not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+@app.get("/api/videos/{video_source_id}/detections")
+def vehicle_detections(video_source_id: int, db: Annotated[Session, Depends(get_db)], limit: int = 500):
+    rows = db.execute(text("""
+        SELECT id, frame_index, round(frame_time_seconds::numeric, 2) AS frame_time_seconds,
+               class_name, round(confidence::numeric, 3) AS confidence,
+               bbox_x, bbox_y, bbox_w, bbox_h, detection_method, created_at
+        FROM vehicle_detections
+        WHERE video_source_id=:video_source_id
+        ORDER BY frame_index, id
+        LIMIT :limit
+    """), {"video_source_id": video_source_id, "limit": limit}).mappings().all()
+    return [{**dict(r), "created_at": r["created_at"].isoformat()} for r in rows]
+
+@app.get("/api/analytics/video-detection-summary")
+def video_detection_summary(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        SELECT vs.id AS video_source_id, vs.camera_code, vd.class_name, vd.detection_method,
+               count(*) AS detections,
+               round(avg(vd.confidence)::numeric, 3) AS avg_confidence,
+               min(vd.frame_time_seconds) AS first_second,
+               max(vd.frame_time_seconds) AS last_second
+        FROM vehicle_detections vd
+        JOIN video_sources vs ON vs.id = vd.video_source_id
+        GROUP BY vs.id, vs.camera_code, vd.class_name, vd.detection_method
+        ORDER BY vs.id DESC, detections DESC
+    """)).mappings().all()
+    return [dict(r) for r in rows]
+
+@app.get("/api/export/vehicle-detections.csv")
+def export_vehicle_detections(db: Annotated[Session, Depends(get_db)]):
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT video_source_id, frame_index, frame_time_seconds, class_name, confidence,
+               bbox_x, bbox_y, bbox_w, bbox_h, detection_method, created_at
+        FROM vehicle_detections
+        ORDER BY video_source_id, frame_index, id
+    """)).mappings().all()]
+    return _csv_response(
+        "vehicle_detections.csv",
+        ["video_source_id", "frame_index", "frame_time_seconds", "class_name", "confidence", "bbox_x", "bbox_y", "bbox_w", "bbox_h", "detection_method", "created_at"],
         rows,
     )

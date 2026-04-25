@@ -112,3 +112,16 @@ GET  /api/export/signal-recommendations.csv
 ```
 
 All signal recommendations are decision-support outputs only. The system does not connect to or control operational traffic signal infrastructure.
+
+## Phase 4 video-processing increment
+
+Phase 4 adds uploaded video processing, sampled-frame preview, and CPU-only OpenCV vehicle-candidate detection.
+
+Recommended test sequence:
+
+1. Import `docs/sample_traffic_video_20s.mp4` from the Historical Video upload card.
+2. In the Phase 4 section, click `Sample frames`.
+3. Click `Detect vehicles`.
+4. Review the sampled frames, detection metadata, and CSV export.
+
+The current detector is a portable fallback for pipeline testing. It is intentionally not dependent on proprietary services, GPU drivers, or automatic model downloads.

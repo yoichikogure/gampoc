@@ -234,3 +234,79 @@ async function refreshPhase3() {
 }
 
 refreshPhase3().catch(console.error);
+
+
+// ---- Phase 4: video processing and vehicle-candidate detection ----
+let selectedVideoId = null;
+
+async function loadVideos() {
+  const rows = await api('/api/videos');
+  if (rows.length && !selectedVideoId) selectedVideoId = rows[0].id;
+  const enriched = rows.map(r => ({
+    ...r,
+    actions: `<button onclick="sampleFrames(${r.id})">Sample frames</button> <button onclick="detectVehicles(${r.id})">Detect vehicles</button> <button onclick="selectVideo(${r.id})">View</button>`
+  }));
+  renderTable('videoTable', enriched, [
+    {key:'id', label:'ID'}, {key:'camera_code', label:'Camera'}, {key:'source_type', label:'Type'},
+    {key:'width', label:'Width'}, {key:'height', label:'Height'}, {key:'fps', label:'FPS'},
+    {key:'duration_seconds', label:'Duration sec'}, {key:'frame_count', label:'Frames'},
+    {key:'frame_samples', label:'Samples'}, {key:'detection_count', label:'Detections'}, {key:'actions', label:'Actions'}
+  ]);
+  if (selectedVideoId) await Promise.all([loadVideoFrames(selectedVideoId), loadVehicleDetections(selectedVideoId)]);
+  await loadVideoDetectionSummary();
+}
+
+async function selectVideo(id) {
+  selectedVideoId = id;
+  await Promise.all([loadVideoFrames(id), loadVehicleDetections(id)]);
+}
+
+async function sampleFrames(id) {
+  const out = document.getElementById('videoProcessResult');
+  out.textContent = 'Sampling frames...';
+  try {
+    const data = await api(`/api/videos/${id}/sample-frames?every_seconds=5&max_frames=60`, { method: 'POST' });
+    out.textContent = JSON.stringify(data, null, 2);
+    selectedVideoId = id;
+    await loadVideos();
+  } catch (err) { out.textContent = err.message; }
+}
+
+async function detectVehicles(id) {
+  const out = document.getElementById('videoProcessResult');
+  out.textContent = 'Detecting vehicle candidates...';
+  try {
+    const data = await api(`/api/videos/${id}/detect-vehicles?every_seconds=1&max_frames=300&min_area=700`, { method: 'POST' });
+    out.textContent = JSON.stringify(data, null, 2);
+    selectedVideoId = id;
+    await loadVideos();
+  } catch (err) { out.textContent = err.message; }
+}
+
+async function loadVideoFrames(id) {
+  const rows = await api(`/api/videos/${id}/frames?limit=12`);
+  const el = document.getElementById('frameGallery');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<p class="hint">No sampled frames yet. Click “Sample frames”.</p>'; return; }
+  el.innerHTML = rows.map(r => `<figure><img src="${r.image_url}" alt="frame ${r.frame_index}" /><figcaption>${r.frame_time_seconds}s / #${r.frame_index}</figcaption></figure>`).join('');
+}
+
+async function loadVehicleDetections(id) {
+  const rows = await api(`/api/videos/${id}/detections?limit=200`);
+  renderTable('vehicleDetectionTable', rows, [
+    {key:'frame_index', label:'Frame'}, {key:'frame_time_seconds', label:'Sec'}, {key:'class_name', label:'Class'},
+    {key:'confidence', label:'Confidence'}, {key:'bbox_x', label:'X'}, {key:'bbox_y', label:'Y'},
+    {key:'bbox_w', label:'W'}, {key:'bbox_h', label:'H'}, {key:'detection_method', label:'Method'}
+  ]);
+}
+
+async function loadVideoDetectionSummary() {
+  const rows = await api('/api/analytics/video-detection-summary');
+  renderTable('videoDetectionSummaryTable', rows, [
+    {key:'video_source_id', label:'Video'}, {key:'camera_code', label:'Camera'}, {key:'class_name', label:'Class'},
+    {key:'detection_method', label:'Method'}, {key:'detections', label:'Detections'},
+    {key:'avg_confidence', label:'Avg confidence'}, {key:'first_second', label:'First sec'}, {key:'last_second', label:'Last sec'}
+  ]);
+}
+
+loadVideos().catch(console.error);
