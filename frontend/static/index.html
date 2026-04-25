@@ -77,6 +77,69 @@
       </div>
     </section>
 
+
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Phase 2: Normalized Detector / Approach Mapping</h2>
+        <button onclick="loadDetectorMappings()">Refresh</button>
+      </div>
+      <p class="hint">Default mapping covers Wadi Saqra INT 806 with 4 approaches × 5 detectors plus 2 extra detectors. Use the API endpoint <code>POST /api/mappings/detectors</code> to refine lane labels after GAM confirms the exact layout.</p>
+      <table id="mappingTable"></table>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Daily Traffic Summary</h2>
+          <a class="button-link" href="/api/export/detector-counts.csv">Export normalized CSV</a>
+        </div>
+        <table id="dailySummaryTable"></table>
+      </div>
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Peak Hour by Approach</h2>
+          <button onclick="loadPeakSummary()">Refresh</button>
+        </div>
+        <table id="peakSummaryTable"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Hourly Traffic Summary</h2>
+        <a class="button-link" href="/api/export/hourly-summary.csv">Export hourly CSV</a>
+      </div>
+      <table id="hourlySummaryTable"></table>
+    </section>
+
+    <section class="grid two">
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Missing Detector Intervals</h2>
+          <button onclick="loadDataQuality()">Refresh</button>
+        </div>
+        <table id="missingTable"></table>
+      </div>
+      <div class="panel">
+        <div class="panel-title">
+          <h2>Detector Data Anomalies</h2>
+          <button onclick="loadDataQuality()">Refresh</button>
+        </div>
+        <table id="anomalyTable"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>Signal Phase Duration Analytics</h2>
+        <button onclick="loadSignalDurations()">Refresh</button>
+      </div>
+      <p class="hint">Durations are calculated from consecutive events of the same intersection and phase. This is for analytics only and does not interact with the operational traffic control system.</p>
+      <table id="signalDurationTable"></table>
+    </section>
+
+
     <section class="panel">
       <div class="panel-title">
         <h2>Ingestion Files</h2>

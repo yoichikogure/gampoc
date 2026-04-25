@@ -11,6 +11,7 @@ function fmt(x) {
 
 function renderTable(id, rows, columns) {
   const el = document.getElementById(id);
+  if (!el) return;
   if (!rows.length) {
     el.innerHTML = "<tr><td>No records yet</td></tr>";
     return;
@@ -106,8 +107,67 @@ async function loadDetectorChart() {
   drawLineChart(document.getElementById('countCanvas'), points);
 }
 
+async function loadDetectorMappings() {
+  const rows = await api('/api/mappings/detectors');
+  renderTable('mappingTable', rows, [
+    {key:'intersection_code', label:'INT'}, {key:'approach_no', label:'Approach'},
+    {key:'approach_name', label:'Approach name'}, {key:'detector_no', label:'Detector'},
+    {key:'lane_label', label:'Lane label'}, {key:'description', label:'Description'}
+  ]);
+}
+
+async function loadDailySummary() {
+  const rows = await api('/api/analytics/daily-summary');
+  renderTable('dailySummaryTable', rows, [
+    {key:'day', label:'Day'}, {key:'approach_no', label:'Approach'}, {key:'approach_name', label:'Approach name'},
+    {key:'total_count', label:'Total count'}, {key:'avg_15min_count', label:'Avg / 15 min'},
+    {key:'max_15min_count', label:'Max / 15 min'}, {key:'interval_records', label:'Records'}
+  ]);
+}
+
+async function loadHourlySummary() {
+  const rows = await api('/api/analytics/hourly-summary');
+  renderTable('hourlySummaryTable', rows.slice(0, 200), [
+    {key:'hour_start', label:'Hour'}, {key:'approach_no', label:'Approach'},
+    {key:'total_count', label:'Total count'}, {key:'avg_15min_count', label:'Avg / 15 min'}, {key:'interval_records', label:'Records'}
+  ]);
+}
+
+async function loadPeakSummary() {
+  const rows = await api('/api/analytics/peak-summary');
+  renderTable('peakSummaryTable', rows, [
+    {key:'approach_no', label:'Approach'}, {key:'hour_start', label:'Peak hour'}, {key:'hourly_count', label:'Hourly count'}
+  ]);
+}
+
+async function loadDataQuality() {
+  const [missing, anomalies] = await Promise.all([
+    api('/api/analytics/missing-intervals'),
+    api('/api/analytics/anomalies')
+  ]);
+  renderTable('missingTable', missing.slice(0, 200), [
+    {key:'expected_time', label:'Missing interval'}, {key:'approach_no', label:'Approach'}, {key:'detector_no', label:'Detector'}
+  ]);
+  renderTable('anomalyTable', anomalies.slice(0, 200), [
+    {key:'interval_start', label:'Interval'}, {key:'approach_no', label:'Approach'}, {key:'detector_no', label:'Detector'},
+    {key:'vehicle_count', label:'Count'}, {key:'anomaly_type', label:'Issue'}, {key:'detector_average', label:'Avg'}, {key:'detector_stddev', label:'Std dev'}
+  ]);
+}
+
+async function loadSignalDurations() {
+  const rows = await api('/api/analytics/signal-phase-durations');
+  renderTable('signalDurationTable', rows, [
+    {key:'intersection_code', label:'INT'}, {key:'phase_no', label:'Phase'}, {key:'signal_state', label:'State'},
+    {key:'event_count', label:'Events'}, {key:'avg_seconds', label:'Avg sec'}, {key:'min_seconds', label:'Min sec'}, {key:'max_seconds', label:'Max sec'}
+  ]);
+}
+
+async function refreshPhase2() {
+  await Promise.all([loadDetectorMappings(), loadDailySummary(), loadHourlySummary(), loadPeakSummary(), loadDataQuality(), loadSignalDurations()]);
+}
+
 async function refreshAll() {
-  await Promise.all([loadSummary(), loadDetectorRows(), loadSignalRows(), loadSignalSummary(), loadFiles(), loadDetectorChart()]);
+  await Promise.all([loadSummary(), loadDetectorRows(), loadSignalRows(), loadSignalSummary(), loadFiles(), loadDetectorChart(), refreshPhase2()]);
 }
 
 upload('detectorForm', '/api/import/detector-log', 'detectorResult');

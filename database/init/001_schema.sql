@@ -157,3 +157,22 @@ FROM intersections i
 CROSS JOIN generate_series(1,2) d(detector_no)
 WHERE i.code='806'
 ON CONFLICT DO NOTHING;
+
+CREATE OR REPLACE VIEW normalized_detector_counts AS
+SELECT dc.id,
+       dc.interval_start,
+       i.code AS intersection_code,
+       i.name AS intersection_name,
+       dc.approach_no,
+       COALESCE(a.name, 'Approach ' || dc.approach_no) AS approach_name,
+       dc.detector_no,
+       d.lane_label,
+       d.description AS detector_description,
+       dc.interval_minutes,
+       dc.vehicle_count,
+       dc.quality_flag,
+       dc.source_file_id
+FROM detector_counts dc
+JOIN intersections i ON i.id = dc.intersection_id
+LEFT JOIN approaches a ON a.intersection_id = dc.intersection_id AND a.approach_no = dc.approach_no
+LEFT JOIN detectors d ON d.intersection_id = dc.intersection_id AND d.approach_no = dc.approach_no AND d.detector_no = dc.detector_no;

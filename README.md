@@ -1,24 +1,10 @@
-# GAM Traffic AI PoC — Phase 1 Working Application
+# GAM Traffic AI PoC - Phase 2 Working Application
 
-This is the first working phase of a Docker-portable, open-source, local web-based dashboard application for the AI-Based Traffic Monitoring and Traffic Flow Forecasting PoC.
+This is a Docker-portable, open-source, local web application prototype for the GAM AI-Based Traffic Monitoring and Traffic Flow Forecasting PoC.
 
-## Current phase
+The application is a standalone analytical prototype for evaluation only. It is not connected to, and does not control, any operational traffic signal system.
 
-Phase 1 implements the foundation:
-
-- Docker Compose deployment
-- PostgreSQL database
-- FastAPI backend
-- Browser-based local dashboard
-- SCATS-style detector log import
-- Signal timing log import
-- Historical video registration and metadata probing
-- Basic dashboard charts and tables
-- Ingestion file status tracking
-
-The system is standalone and evaluation-only. It does not connect to or control any operational traffic signal system.
-
-## Start
+## Run
 
 ```bash
 docker compose up --build
@@ -30,45 +16,66 @@ Open:
 http://localhost:8080
 ```
 
-API docs:
+API documentation:
 
 ```text
 http://localhost:8080/docs
 ```
 
-## Stop
+## Phase 1 functions
 
-```bash
-docker compose down
-```
+- Docker Compose deployment
+- PostgreSQL database
+- FastAPI backend
+- Static local web dashboard
+- SCATS-style detector log import
+- Signal timing log import
+- Historical video file registration and metadata probing
+- Basic detector chart and signal event tables
+- Ingestion file tracking
 
-To delete the database volume as well:
+## Phase 2 functions
 
-```bash
-docker compose down -v
-```
-
-## Import data
-
-Use the web dashboard upload cards or call the API endpoints:
-
-- `POST /api/import/detector-log`
-- `POST /api/import/signal-log`
-- `POST /api/import/video`
+- Normalized detector / approach mapping
+- Daily traffic summary by approach
+- Hourly traffic summary by approach
+- Peak hour by approach
+- Missing 15-minute interval checks
+- Simple detector anomaly detection
+- Signal phase duration analytics
+- CSV export of normalized detector counts
+- CSV export of hourly summary
 
 ## Sample files
 
-Sample detector and signal logs are provided under:
+- `docs/sample_detector_log.txt`
+- `docs/sample_signal_log.txt`
+
+## Useful API endpoints
 
 ```text
-docs/sample_detector_log.txt
-docs/sample_signal_log.txt
+GET  /api/summary
+POST /api/import/detector-log
+POST /api/import/signal-log
+POST /api/import/video
+GET  /api/mappings/detectors
+POST /api/mappings/detectors
+GET  /api/analytics/daily-summary
+GET  /api/analytics/hourly-summary
+GET  /api/analytics/peak-summary
+GET  /api/analytics/missing-intervals
+GET  /api/analytics/anomalies
+GET  /api/analytics/signal-phase-durations
+GET  /api/export/detector-counts.csv
+GET  /api/export/hourly-summary.csv
 ```
 
-## Next development phases
+## Next phase
 
-- Phase 2: detector/approach mapping, better validation, historical analytics
-- Phase 3: baseline forecasting and rule-based signal recommendation
-- Phase 4: video processing and vehicle detection
-- Phase 5: tracking and incident detection
-- Phase 6: testing, manuals, training material, packaging
+Phase 3 should add traffic flow forecasting and signal timing recommendation:
+
+1. Historical average baseline forecast
+2. Machine-learning forecast using recent counts, time-of-day, weekday, detector, and approach features
+3. 15 / 30 / 60-minute forecast horizons
+4. Forecast evaluation metrics
+5. Evaluation-only signal timing recommendation rules

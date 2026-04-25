@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -274,3 +274,226 @@ def ingestion_files(db: Annotated[Session, Depends(get_db)]):
         )
     ).mappings().all()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/mappings/detectors")
+def detector_mappings(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        SELECT i.code AS intersection_code, d.id AS detector_id, d.approach_no, d.detector_no,
+               COALESCE(a.name, 'Approach ' || d.approach_no) AS approach_name,
+               d.lane_label, d.description
+        FROM detectors d
+        JOIN intersections i ON i.id = d.intersection_id
+        LEFT JOIN approaches a ON a.intersection_id = d.intersection_id AND a.approach_no = d.approach_no
+        ORDER BY d.approach_no, d.detector_no
+    """)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/mappings/detectors")
+def upsert_detector_mapping(payload: dict, db: Annotated[Session, Depends(get_db)]):
+    code = str(payload.get("intersection_code") or "806")
+    approach_no = int(payload["approach_no"])
+    detector_no = int(payload["detector_no"])
+    lane_label = payload.get("lane_label")
+    description = payload.get("description")
+    approach_name = payload.get("approach_name")
+    intersection_id = db.execute(text("SELECT id FROM intersections WHERE code=:code"), {"code": code}).scalar_one_or_none()
+    if not intersection_id:
+        intersection_id = db.execute(text("INSERT INTO intersections(code, name) VALUES (:code, :name) RETURNING id"), {"code": code, "name": f"Intersection {code}"}).scalar_one()
+    if approach_name:
+        db.execute(text("""
+            INSERT INTO approaches(intersection_id, approach_no, name)
+            VALUES (:intersection_id, :approach_no, :name)
+            ON CONFLICT (intersection_id, approach_no) DO UPDATE SET name=EXCLUDED.name
+        """), {"intersection_id": intersection_id, "approach_no": approach_no, "name": approach_name})
+    db.execute(text("""
+        INSERT INTO detectors(intersection_id, approach_no, detector_no, lane_label, description)
+        VALUES (:intersection_id, :approach_no, :detector_no, :lane_label, :description)
+        ON CONFLICT (intersection_id, approach_no, detector_no)
+        DO UPDATE SET lane_label=EXCLUDED.lane_label, description=EXCLUDED.description
+    """), {"intersection_id": intersection_id, "approach_no": approach_no, "detector_no": detector_no, "lane_label": lane_label, "description": description})
+    db.commit()
+    return {"status": "saved", "intersection_code": code, "approach_no": approach_no, "detector_no": detector_no}
+
+
+@app.get("/api/analytics/daily-summary")
+def daily_summary(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        SELECT date_trunc('day', dc.interval_start) AS day,
+               dc.approach_no,
+               COALESCE(a.name, 'Approach ' || dc.approach_no) AS approach_name,
+               sum(dc.vehicle_count) AS total_count,
+               avg(dc.vehicle_count)::numeric(10,2) AS avg_15min_count,
+               max(dc.vehicle_count) AS max_15min_count,
+               count(*) AS interval_records
+        FROM detector_counts dc
+        LEFT JOIN approaches a ON a.intersection_id=dc.intersection_id AND a.approach_no=dc.approach_no
+        GROUP BY day, dc.approach_no, approach_name
+        ORDER BY day DESC, dc.approach_no
+        LIMIT 500
+    """)).mappings().all()
+    return [{**dict(r), "day": r["day"].date().isoformat()} for r in rows]
+
+
+@app.get("/api/analytics/hourly-summary")
+def hourly_summary(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        SELECT date_trunc('hour', interval_start) AS hour_start,
+               approach_no,
+               sum(vehicle_count) AS total_count,
+               avg(vehicle_count)::numeric(10,2) AS avg_15min_count,
+               count(*) AS interval_records
+        FROM detector_counts
+        GROUP BY hour_start, approach_no
+        ORDER BY hour_start DESC, approach_no
+        LIMIT 1000
+    """)).mappings().all()
+    return [{**dict(r), "hour_start": r["hour_start"].isoformat()} for r in rows]
+
+
+@app.get("/api/analytics/peak-summary")
+def peak_summary(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        WITH hourly AS (
+          SELECT date_trunc('hour', interval_start) AS hour_start,
+                 approach_no,
+                 sum(vehicle_count) AS hourly_count
+          FROM detector_counts
+          GROUP BY hour_start, approach_no
+        ), ranked AS (
+          SELECT *, row_number() OVER (PARTITION BY approach_no ORDER BY hourly_count DESC, hour_start DESC) AS rn
+          FROM hourly
+        )
+        SELECT approach_no, hour_start, hourly_count
+        FROM ranked
+        WHERE rn=1
+        ORDER BY approach_no
+    """)).mappings().all()
+    return [{**dict(r), "hour_start": r["hour_start"].isoformat()} for r in rows]
+
+
+@app.get("/api/analytics/missing-intervals")
+def missing_intervals(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        WITH bounds AS (
+          SELECT intersection_id, approach_no, detector_no,
+                 min(interval_start) AS min_time, max(interval_start) AS max_time
+          FROM detector_counts
+          GROUP BY intersection_id, approach_no, detector_no
+        ), expected AS (
+          SELECT b.intersection_id, b.approach_no, b.detector_no,
+                 generate_series(b.min_time, b.max_time, interval '15 minutes') AS expected_time
+          FROM bounds b
+        )
+        SELECT e.approach_no, e.detector_no, e.expected_time
+        FROM expected e
+        LEFT JOIN detector_counts dc
+          ON dc.intersection_id=e.intersection_id
+         AND dc.approach_no=e.approach_no
+         AND dc.detector_no=e.detector_no
+         AND dc.interval_start=e.expected_time
+        WHERE dc.id IS NULL
+        ORDER BY e.expected_time DESC, e.approach_no, e.detector_no
+        LIMIT 500
+    """)).mappings().all()
+    return [{**dict(r), "expected_time": r["expected_time"].isoformat()} for r in rows]
+
+
+@app.get("/api/analytics/anomalies")
+def detector_anomalies(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        WITH stats AS (
+          SELECT approach_no, detector_no,
+                 avg(vehicle_count) AS avg_count,
+                 stddev_pop(vehicle_count) AS std_count
+          FROM detector_counts
+          GROUP BY approach_no, detector_no
+        )
+        SELECT dc.interval_start, dc.approach_no, dc.detector_no, dc.vehicle_count,
+               CASE
+                 WHEN dc.quality_flag <> 'ok' THEN dc.quality_flag
+                 WHEN dc.vehicle_count = 0 THEN 'zero_count'
+                 WHEN s.std_count IS NOT NULL AND s.std_count > 0
+                      AND abs(dc.vehicle_count - s.avg_count) > 3 * s.std_count THEN 'statistical_outlier'
+                 ELSE 'ok'
+               END AS anomaly_type,
+               round(s.avg_count::numeric, 2) AS detector_average,
+               round(s.std_count::numeric, 2) AS detector_stddev
+        FROM detector_counts dc
+        JOIN stats s ON s.approach_no=dc.approach_no AND s.detector_no=dc.detector_no
+        WHERE dc.quality_flag <> 'ok'
+           OR dc.vehicle_count = 0
+           OR (s.std_count IS NOT NULL AND s.std_count > 0 AND abs(dc.vehicle_count - s.avg_count) > 3 * s.std_count)
+        ORDER BY dc.interval_start DESC
+        LIMIT 500
+    """)).mappings().all()
+    return [{**dict(r), "interval_start": r["interval_start"].isoformat()} for r in rows]
+
+
+@app.get("/api/analytics/signal-phase-durations")
+def signal_phase_durations(db: Annotated[Session, Depends(get_db)]):
+    rows = db.execute(text("""
+        WITH ordered AS (
+          SELECT intersection_code, phase_no, signal_state, event_time,
+                 lead(event_time) OVER (PARTITION BY intersection_code, phase_no ORDER BY event_time) AS next_time
+          FROM signal_events
+        ), durations AS (
+          SELECT intersection_code, phase_no, signal_state,
+                 extract(epoch from (next_time - event_time)) AS duration_seconds
+          FROM ordered
+          WHERE next_time IS NOT NULL
+            AND next_time > event_time
+            AND extract(epoch from (next_time - event_time)) < 3600
+        )
+        SELECT intersection_code, phase_no, signal_state,
+               count(*) AS event_count,
+               round(avg(duration_seconds)::numeric, 2) AS avg_seconds,
+               round(min(duration_seconds)::numeric, 2) AS min_seconds,
+               round(max(duration_seconds)::numeric, 2) AS max_seconds
+        FROM durations
+        GROUP BY intersection_code, phase_no, signal_state
+        ORDER BY phase_no, signal_state
+    """)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def _csv_response(filename: str, header: list[str], rows: list[dict]) -> Response:
+    import csv
+    import io
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=header)
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({k: r.get(k) for k in header})
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/export/detector-counts.csv")
+def export_detector_counts(db: Annotated[Session, Depends(get_db)]):
+    rows = [dict(r) for r in db.execute(text("""
+        SELECT dc.interval_start, i.code AS intersection_code, dc.approach_no,
+               COALESCE(a.name, 'Approach ' || dc.approach_no) AS approach_name,
+               dc.detector_no, d.lane_label, dc.vehicle_count, dc.interval_minutes, dc.quality_flag
+        FROM detector_counts dc
+        JOIN intersections i ON i.id=dc.intersection_id
+        LEFT JOIN approaches a ON a.intersection_id=dc.intersection_id AND a.approach_no=dc.approach_no
+        LEFT JOIN detectors d ON d.intersection_id=dc.intersection_id AND d.approach_no=dc.approach_no AND d.detector_no=dc.detector_no
+        ORDER BY dc.interval_start, dc.approach_no, dc.detector_no
+    """)).mappings().all()]
+    for r in rows:
+        r["interval_start"] = r["interval_start"].isoformat()
+    return _csv_response("detector_counts_normalized.csv", [
+        "interval_start", "intersection_code", "approach_no", "approach_name", "detector_no",
+        "lane_label", "vehicle_count", "interval_minutes", "quality_flag"
+    ], rows)
+
+
+@app.get("/api/export/hourly-summary.csv")
+def export_hourly_summary(db: Annotated[Session, Depends(get_db)]):
+    rows = hourly_summary(db)
+    return _csv_response("hourly_summary.csv", ["hour_start", "approach_no", "total_count", "avg_15min_count", "interval_records"], rows)
