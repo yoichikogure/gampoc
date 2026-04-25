@@ -310,3 +310,63 @@ async function loadVideoDetectionSummary() {
 }
 
 loadVideos().catch(console.error);
+
+// ---- Phase 5: incident detection and human review ----
+async function detectIncidentsForSelectedVideo() {
+  const out = document.getElementById('incidentRunResult');
+  if (!selectedVideoId) {
+    out.textContent = 'No video selected. Upload/register a video first or click View in the Phase 4 video table.';
+    return;
+  }
+  out.textContent = 'Detecting incident candidates...';
+  try {
+    const data = await api(`/api/videos/${selectedVideoId}/detect-incidents?congestion_threshold=3&stalled_seconds=8`, { method: 'POST' });
+    out.textContent = JSON.stringify(data, null, 2);
+    await Promise.all([loadIncidents(), loadIncidentSummary(), loadSummary()]);
+  } catch (err) {
+    out.textContent = err.message;
+  }
+}
+
+async function loadIncidentSummary() {
+  const rows = await api('/api/analytics/incident-summary');
+  renderTable('incidentSummaryTable', rows, [
+    {key:'video_source_id', label:'Video'}, {key:'camera_code', label:'Camera'}, {key:'event_type', label:'Event type'},
+    {key:'review_status', label:'Review'}, {key:'events', label:'Events'}, {key:'avg_confidence', label:'Avg confidence'},
+    {key:'first_second', label:'First sec'}, {key:'last_second', label:'Last sec'}
+  ]);
+}
+
+async function loadIncidents() {
+  const rows = await api('/api/incidents?limit=300');
+  const enhanced = rows.map(r => ({
+    ...r,
+    actions: `<button onclick="showIncidentSnapshot(${r.id})">View</button> <button onclick="reviewIncident(${r.id}, 'confirmed')">Confirm</button> <button onclick="reviewIncident(${r.id}, 'false_positive')">False +</button> <button onclick="reviewIncident(${r.id}, 'uncertain')">Uncertain</button>`
+  }));
+  renderTable('incidentTable', enhanced, [
+    {key:'id', label:'ID'}, {key:'event_type', label:'Type'}, {key:'camera_code', label:'Camera'}, {key:'zone_label', label:'Zone'},
+    {key:'confidence', label:'Confidence'}, {key:'queue_length_estimate', label:'Queue est.'}, {key:'review_status', label:'Review'},
+    {key:'video_source_id', label:'Video'}, {key:'frame_time_seconds', label:'Sec'}, {key:'notes', label:'Notes'}, {key:'actions', label:'Actions'}
+  ]);
+}
+
+async function reviewIncident(id, status) {
+  await api(`/api/incidents/${id}/review`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ review_status: status })
+  });
+  await Promise.all([loadIncidents(), loadIncidentSummary()]);
+}
+
+function showIncidentSnapshot(id) {
+  const el = document.getElementById('incidentSnapshot');
+  if (!el) return;
+  el.innerHTML = `<img src="/api/incidents/${id}/snapshot" alt="incident ${id}" onerror="this.outerHTML='<p class=&quot;hint&quot;>No snapshot available for this incident.</p>'" /><p class="hint">Incident #${id}</p>`;
+}
+
+async function refreshPhase5() {
+  await Promise.all([loadIncidents(), loadIncidentSummary()]);
+}
+
+refreshPhase5().catch(console.error);

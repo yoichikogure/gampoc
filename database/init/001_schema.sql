@@ -126,8 +126,14 @@ CREATE TABLE IF NOT EXISTS incident_events (
   queue_length_estimate NUMERIC,
   review_status TEXT NOT NULL DEFAULT 'unreviewed',
   notes TEXT,
+  video_source_id INT REFERENCES video_sources(id) ON DELETE SET NULL,
+  frame_index BIGINT,
+  frame_time_seconds NUMERIC,
+  detection_method TEXT DEFAULT 'rule_based_phase5',
   created_at TIMESTAMPTZ DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_incident_events_video ON incident_events(video_source_id, frame_index);
+CREATE INDEX IF NOT EXISTS idx_incident_events_review ON incident_events(review_status, event_type);
 
 CREATE TABLE IF NOT EXISTS forecast_results (
   id BIGSERIAL PRIMARY KEY,

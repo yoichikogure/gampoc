@@ -19,6 +19,7 @@
     <a href="#phase2">Phase 2 Analytics</a>
     <a href="#phase3">Phase 3 Forecasting</a>
     <a href="#phase4">Phase 4 Video Detection</a>
+    <a href="#phase5">Phase 5 Incident Review</a>
   </nav>
 
   <main>
@@ -26,10 +27,10 @@
 
     <section class="panel phase4-callout">
       <div class="panel-title">
-        <h2>Phase 4 is available: Video Processing and Vehicle Detection</h2>
-        <a class="button-link" href="#phase4">Go to Phase 4 section</a>
+        <h2>Phase 5 is available: Incident Detection and Human Review</h2>
+        <a class="button-link" href="#phase5">Go to Phase 5 section</a>
       </div>
-      <p class="hint">Upload a historical traffic video in Data Import, then use the Phase 4 section to sample frames, run CPU-only vehicle-candidate detection, review detections, and export detection CSV.</p>
+      <p class="hint">Upload a historical traffic video, run Phase 4 detection, then use Phase 5 to generate incident candidates, review them as confirmed / false positive / uncertain, and export incident logs.</p>
     </section>
 
     <section class="panel" id="phase1">
@@ -210,6 +211,33 @@
       <h3>Latest Vehicle-Candidate Detections</h3>
       <table id="vehicleDetectionTable"></table>
       <pre id="videoProcessResult"></pre>
+    </section>
+
+
+
+    <section class="panel phase5-panel" id="phase5">
+      <div class="panel-title">
+        <h2>Phase 5: Incident Detection and Human Review</h2>
+        <div class="button-row">
+          <button onclick="detectIncidentsForSelectedVideo()">Detect incident candidates</button>
+          <button onclick="loadIncidents()">Refresh incidents</button>
+          <a class="button-link" href="/api/export/incidents.csv">Export incidents CSV</a>
+        </div>
+      </div>
+      <p class="hint">Phase 5 converts Phase 4 vehicle-candidate detections into explainable incident candidates: congestion events and possible stalled vehicles. All events remain <strong>unreviewed</strong> until a GAM user marks them as confirmed, false positive, or uncertain.</p>
+      <pre id="incidentRunResult"></pre>
+      <div class="grid two">
+        <div>
+          <h3>Incident Summary</h3>
+          <table id="incidentSummaryTable"></table>
+        </div>
+        <div>
+          <h3>Incident Snapshot</h3>
+          <div id="incidentSnapshot" class="snapshot-box"><p class="hint">Click “View” in the incident table to show a snapshot.</p></div>
+        </div>
+      </div>
+      <h3>Incident Event Review</h3>
+      <table id="incidentTable"></table>
     </section>
 
     <section class="panel">

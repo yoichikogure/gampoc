@@ -1,4 +1,4 @@
-# GAM Traffic AI PoC - Phase 4 Working Application
+# GAM Traffic AI PoC - Phase 5 Working Application
 
 This is a Docker-portable, open-source, local web application prototype for the GAM AI-Based Traffic Monitoring and Traffic Flow Forecasting PoC.
 
@@ -113,14 +113,14 @@ GET  /api/export/signal-recommendations.csv
 
 All signal recommendations are decision-support outputs only. The system does not connect to or control operational traffic signal infrastructure.
 
-## Phase 4 video-processing increment
+## Phase 5 video-processing increment
 
-Phase 4 adds uploaded video processing, sampled-frame preview, and CPU-only OpenCV vehicle-candidate detection.
+Phase 5 adds uploaded video processing, sampled-frame preview, and CPU-only OpenCV vehicle-candidate detection.
 
 Recommended test sequence:
 
 1. Import `docs/sample_traffic_video_20s.mp4` from the Historical Video upload card.
-2. In the Phase 4 section, click `Sample frames`.
+2. In the Phase 5 section, click `Sample frames`.
 3. Click `Detect vehicles`.
 4. Review the sampled frames, detection metadata, and CSV export.
 
@@ -137,7 +137,7 @@ The current detector is a portable fallback for pipeline testing. It is intentio
 - Forecast and recommendation CSV export
 
 
-## Phase 4 functions
+## Phase 5 functions
 
 - Historical traffic video upload / registration
 - Video metadata probing with OpenCV
@@ -147,10 +147,10 @@ The current detector is a portable fallback for pipeline testing. It is intentio
 - Detection summary dashboard
 - Vehicle detections CSV export
 
-The Phase 4 section is visible from the top navigation link: **Phase 4 Video Detection**.
+The Phase 5 section is visible from the top navigation link: **Phase 5 Video Detection**.
 
 
-## Phase 4 API endpoints
+## Phase 5 API endpoints
 
 ```text
 GET  /api/videos
@@ -161,3 +161,33 @@ GET  /api/videos/{video_source_id}/detections
 GET  /api/analytics/video-detection-summary
 GET  /api/export/vehicle-detections.csv
 ```
+
+
+## Phase 5 additions
+
+Phase 5 adds incident detection and human review on top of the Phase 4 video pipeline.
+
+New dashboard section:
+
+```text
+Phase 5: Incident Detection and Human Review
+```
+
+New endpoints:
+
+```text
+POST /api/videos/{video_source_id}/detect-incidents
+GET  /api/incidents
+PATCH /api/incidents/{incident_id}/review
+GET  /api/analytics/incident-summary
+GET  /api/export/incidents.csv
+```
+
+Suggested workflow:
+
+1. Import the sample video or another traffic video.
+2. In Phase 4, sample frames and detect vehicles.
+3. In Phase 5, detect incident candidates.
+4. Review candidate events as confirmed, false positive, or uncertain.
+
+See `docs/phase5_incident_detection.md` for details.
