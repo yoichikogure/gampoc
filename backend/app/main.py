@@ -525,7 +525,11 @@ def run_forecast(db: Annotated[Session, Depends(get_db)], horizons: str = "15,30
     try:
         return generate_forecasts(db, _parse_horizons(horizons), model_name=model_name)
     except ValueError as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Forecasting failed: {type(e).__name__}: {e}") from e
 
 @app.get("/api/forecast/evaluation")
 def forecast_evaluation(db: Annotated[Session, Depends(get_db)], horizons: str = "15,30,60", model_name: str = "historical_average"):
