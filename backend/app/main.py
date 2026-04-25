@@ -881,10 +881,25 @@ def detect_incidents(video_source_id: int, db: Annotated[Session, Depends(get_db
 
 @app.get("/api/incidents")
 def incidents(db: Annotated[Session, Depends(get_db)], limit: int = 300, video_source_id: int | None = None):
-    rows = db.execute(text("""
-        SELECT id, event_time, event_type, camera_code, zone_label, round(confidence::numeric, 3) AS confidence, queue_length_estimate, review_status, notes, video_source_id, frame_index, round(frame_time_seconds::numeric, 2) AS frame_time_seconds, detection_method, snapshot_path, created_at
-        FROM incident_events WHERE (:video_source_id IS NULL OR video_source_id=:video_source_id) ORDER BY created_at DESC, id DESC LIMIT :limit
-    """), {"limit": limit, "video_source_id": video_source_id}).mappings().all()
+    """Return incident events without PostgreSQL ambiguous NULL parameter typing."""
+    safe_limit = max(1, min(int(limit or 300), 1000))
+    params = {"limit": safe_limit}
+    where_clause = ""
+    if video_source_id is not None:
+        where_clause = "WHERE video_source_id = :video_source_id"
+        params["video_source_id"] = int(video_source_id)
+
+    rows = db.execute(text(f"""
+        SELECT id, event_time, event_type, camera_code, zone_label,
+               round(confidence::numeric, 3) AS confidence,
+               queue_length_estimate, review_status, notes, video_source_id,
+               frame_index, round(frame_time_seconds::numeric, 2) AS frame_time_seconds,
+               detection_method, snapshot_path, created_at
+        FROM incident_events
+        {where_clause}
+        ORDER BY created_at DESC, id DESC
+        LIMIT :limit
+    """), params).mappings().all()
     result = []
     for r in rows:
         d = dict(r)
