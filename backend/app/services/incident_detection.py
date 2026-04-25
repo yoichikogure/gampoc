@@ -16,6 +16,17 @@ class IncidentCandidate:
     snapshot_path: str | None = None
 
 
+def _valid_box(d: dict[str, Any]) -> bool:
+    required = ["bbox_x", "bbox_y", "bbox_w", "bbox_h", "frame_index"]
+    for key in required:
+        if d.get(key) is None:
+            return False
+    try:
+        return float(d["bbox_w"]) > 0 and float(d["bbox_h"]) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _center(d: dict[str, Any]) -> tuple[float, float]:
     return (float(d["bbox_x"]) + float(d["bbox_w"]) / 2.0, float(d["bbox_y"]) + float(d["bbox_h"]) / 2.0)
 
@@ -33,19 +44,15 @@ def generate_incident_candidates(
 ) -> list[IncidentCandidate]:
     """Create explainable Phase 5 incident candidates from Phase 4 detections.
 
-    This is intentionally rule-based for the PoC. It supports two incident types:
-    1) congestion_event: many vehicle candidates in the same sampled frame
-    2) possible_stalled_vehicle: a similar detection remains in almost the same
-       position across multiple sampled frames
-
-    The output is an incident candidate list. Human review in the dashboard is
-    still required before treating an event as confirmed.
+    Bad/partial detection rows are ignored so that reused older database volumes
+    do not crash the incident detection endpoint.
     """
     if congestion_threshold < 1:
         raise ValueError("congestion_threshold must be at least 1")
     if stalled_seconds <= 0:
         raise ValueError("stalled_seconds must be positive")
 
+    detections = [d for d in detections if _valid_box(d)]
     detections = sorted(detections, key=lambda d: (float(d.get("frame_time_seconds") or 0), int(d.get("id") or 0)))
     candidates: list[IncidentCandidate] = []
 
@@ -130,6 +137,4 @@ def generate_incident_candidates(
                 ),
             ))
 
-    # Keep output stable and avoid excessive duplicate frame-level congestion events.
-    candidates = sorted(candidates, key=lambda c: (c.frame_time_seconds, c.event_type))
-    return candidates
+    return sorted(candidates, key=lambda c: (c.frame_time_seconds, c.event_type))

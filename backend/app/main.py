@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .config import APP_TITLE, DATA_ROOT, FRONTEND_ROOT
@@ -71,6 +72,12 @@ def ensure_phase5_tables():
     );
     CREATE INDEX IF NOT EXISTS idx_video_frames_source ON video_frames(video_source_id, frame_index);
     CREATE INDEX IF NOT EXISTS idx_vehicle_detections_source ON vehicle_detections(video_source_id, frame_index);
+    ALTER TABLE vehicle_detections ADD COLUMN IF NOT EXISTS bbox_x INT;
+    ALTER TABLE vehicle_detections ADD COLUMN IF NOT EXISTS bbox_y INT;
+    ALTER TABLE vehicle_detections ADD COLUMN IF NOT EXISTS bbox_w INT;
+    ALTER TABLE vehicle_detections ADD COLUMN IF NOT EXISTS bbox_h INT;
+    ALTER TABLE vehicle_detections ADD COLUMN IF NOT EXISTS detection_method TEXT DEFAULT 'opencv_motion_fallback';
+    ALTER TABLE video_frames ADD COLUMN IF NOT EXISTS image_path TEXT;
     CREATE TABLE IF NOT EXISTS incident_events (id BIGSERIAL PRIMARY KEY, event_time TIMESTAMPTZ NOT NULL DEFAULT now(), event_type TEXT NOT NULL, camera_code TEXT, zone_label TEXT, confidence NUMERIC, snapshot_path TEXT, clip_path TEXT, queue_length_estimate NUMERIC, review_status TEXT NOT NULL DEFAULT 'unreviewed', notes TEXT, created_at TIMESTAMPTZ DEFAULT now());
     ALTER TABLE incident_events ADD COLUMN IF NOT EXISTS video_source_id INT REFERENCES video_sources(id) ON DELETE SET NULL;
     ALTER TABLE incident_events ADD COLUMN IF NOT EXISTS frame_index BIGINT;
@@ -794,40 +801,83 @@ def export_vehicle_detections(db: Annotated[Session, Depends(get_db)]):
 
 # ---- Phase 5: incident detection and human review workflow ----
 
-def _ensure_video_prerequisites(db: Session, video_source_id: int) -> None:
+def _ensure_video_prerequisites(db: Session, video_source_id: int) -> dict[str, int]:
+    """Make the Phase 5 button safe to click.
+
+    If users forgot to run Phase 4 manually, this tries to create frame samples and
+    vehicle detections automatically. Any OpenCV/video problem is converted into a
+    clear 400 response instead of a generic Internal Server Error.
+    """
     frame_count = db.execute(text("SELECT count(*) FROM video_frames WHERE video_source_id=:id"), {"id": video_source_id}).scalar_one()
     if int(frame_count) == 0:
-        sample_frames(video_source_id, db, every_seconds=1.0, max_frames=240)
+        try:
+            sample_frames(video_source_id, db, every_seconds=1.0, max_frames=240)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Could not sample frames for this video: {exc}") from exc
+
     detection_count = db.execute(text("SELECT count(*) FROM vehicle_detections WHERE video_source_id=:id"), {"id": video_source_id}).scalar_one()
     if int(detection_count) == 0:
-        detect_vehicles(video_source_id, db, every_seconds=1.0, max_frames=600, min_area=500)
+        try:
+            detect_vehicles(video_source_id, db, every_seconds=1.0, max_frames=600, min_area=500)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Could not generate vehicle detections for this video: {exc}") from exc
+
+    frame_count = db.execute(text("SELECT count(*) FROM video_frames WHERE video_source_id=:id"), {"id": video_source_id}).scalar_one()
+    detection_count = db.execute(text("SELECT count(*) FROM vehicle_detections WHERE video_source_id=:id"), {"id": video_source_id}).scalar_one()
+    return {"frame_count": int(frame_count), "detection_count": int(detection_count)}
 
 
 @app.post("/api/videos/{video_source_id}/detect-incidents")
 def detect_incidents(video_source_id: int, db: Annotated[Session, Depends(get_db)], congestion_threshold: int = 3, stalled_seconds: float = 8.0, replace_existing: bool = True):
-    _video_path_from_id(db, video_source_id)
-    _ensure_video_prerequisites(db, video_source_id)
-    detections = [dict(r) for r in db.execute(text("""
-        SELECT id, video_source_id, frame_index, frame_time_seconds, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h, detection_method
-        FROM vehicle_detections WHERE video_source_id=:video_source_id ORDER BY frame_time_seconds, id
-    """), {"video_source_id": video_source_id}).mappings().all()]
-    if not detections:
-        raise HTTPException(status_code=400, detail="No vehicle detections were generated for this video. Try a lower min_area in Phase 4 or use a clearer traffic video.")
-    frames = {int(r["frame_index"]): r["image_path"] for r in db.execute(text("SELECT frame_index, image_path FROM video_frames WHERE video_source_id=:video_source_id"), {"video_source_id": video_source_id}).mappings().all()}
-    candidates = generate_incident_candidates(detections, frames, congestion_threshold=congestion_threshold, stalled_seconds=stalled_seconds)
-    if replace_existing:
-        db.execute(text("DELETE FROM incident_events WHERE video_source_id=:video_source_id AND detection_method='rule_based_phase5'"), {"video_source_id": video_source_id})
-    camera_code = db.execute(text("SELECT camera_code FROM video_sources WHERE id=:id"), {"id": video_source_id}).scalar_one_or_none() or "CAM-1"
-    inserted = 0
-    for c in candidates:
-        db.execute(text("""
-            INSERT INTO incident_events(event_time, event_type, camera_code, zone_label, confidence, snapshot_path, queue_length_estimate, review_status, notes, video_source_id, frame_index, frame_time_seconds, detection_method)
-            VALUES (now(), :event_type, :camera_code, :zone_label, :confidence, :snapshot_path, :queue_length_estimate, 'unreviewed', :notes, :video_source_id, :frame_index, :frame_time_seconds, 'rule_based_phase5')
-        """), {"event_type": c.event_type, "camera_code": camera_code, "zone_label": c.zone_label, "confidence": c.confidence, "snapshot_path": c.snapshot_path, "queue_length_estimate": c.queue_length_estimate, "notes": c.notes, "video_source_id": video_source_id, "frame_index": c.frame_index, "frame_time_seconds": c.frame_time_seconds})
-        inserted += 1
-    db.commit()
-    return {"video_source_id": video_source_id, "detections_used": len(detections), "incident_events_created": inserted, "congestion_threshold": congestion_threshold, "stalled_seconds": stalled_seconds, "note": "Incident events are candidates and require human review before confirmation."}
-
+    try:
+        _video_path_from_id(db, video_source_id)
+        prereq = _ensure_video_prerequisites(db, video_source_id)
+        detections = [dict(r) for r in db.execute(text("""
+            SELECT id, video_source_id, frame_index, frame_time_seconds, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h, detection_method
+            FROM vehicle_detections
+            WHERE video_source_id=:video_source_id
+              AND bbox_x IS NOT NULL AND bbox_y IS NOT NULL AND bbox_w IS NOT NULL AND bbox_h IS NOT NULL
+              AND bbox_w > 0 AND bbox_h > 0
+            ORDER BY frame_time_seconds, id
+        """), {"video_source_id": video_source_id}).mappings().all()]
+        if not detections:
+            return {
+                "video_source_id": video_source_id,
+                "detections_used": 0,
+                "incident_events_created": 0,
+                "congestion_threshold": congestion_threshold,
+                "stalled_seconds": stalled_seconds,
+                "note": "No valid vehicle detections were available. Try Phase 4 Detect vehicles with a lower min_area value or use a clearer traffic video.",
+                **prereq,
+            }
+        frames = {int(r["frame_index"]): r["image_path"] for r in db.execute(text("SELECT frame_index, image_path FROM video_frames WHERE video_source_id=:video_source_id"), {"video_source_id": video_source_id}).mappings().all() if r["frame_index"] is not None}
+        candidates = generate_incident_candidates(detections, frames, congestion_threshold=congestion_threshold, stalled_seconds=stalled_seconds)
+        if replace_existing:
+            db.execute(text("DELETE FROM incident_events WHERE video_source_id=:video_source_id AND COALESCE(detection_method, 'rule_based_phase5')='rule_based_phase5'"), {"video_source_id": video_source_id})
+        camera_code = db.execute(text("SELECT camera_code FROM video_sources WHERE id=:id"), {"id": video_source_id}).scalar_one_or_none() or "CAM-1"
+        inserted = 0
+        for c in candidates:
+            db.execute(text("""
+                INSERT INTO incident_events(event_time, event_type, camera_code, zone_label, confidence, snapshot_path, queue_length_estimate, review_status, notes, video_source_id, frame_index, frame_time_seconds, detection_method)
+                VALUES (now(), :event_type, :camera_code, :zone_label, :confidence, :snapshot_path, :queue_length_estimate, 'unreviewed', :notes, :video_source_id, :frame_index, :frame_time_seconds, 'rule_based_phase5')
+            """), {"event_type": c.event_type, "camera_code": camera_code, "zone_label": c.zone_label, "confidence": float(c.confidence), "snapshot_path": c.snapshot_path, "queue_length_estimate": c.queue_length_estimate, "notes": c.notes, "video_source_id": video_source_id, "frame_index": int(c.frame_index), "frame_time_seconds": float(c.frame_time_seconds)})
+            inserted += 1
+        db.commit()
+        return {"video_source_id": video_source_id, "detections_used": len(detections), "incident_events_created": inserted, "congestion_threshold": congestion_threshold, "stalled_seconds": stalled_seconds, "note": "Incident events are candidates and require human review before confirmation.", **prereq}
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Incident detection database error: {exc}") from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Incident detection failed: {exc}") from exc
 
 @app.get("/api/incidents")
 def incidents(db: Annotated[Session, Depends(get_db)], limit: int = 300, video_source_id: int | None = None):
