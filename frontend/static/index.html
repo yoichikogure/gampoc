@@ -14,11 +14,25 @@
     </div>
     <div class="badge">Evaluation only — no signal control connection</div>
   </header>
+  <nav class="phase-nav">
+    <a href="#phase1">Data Import</a>
+    <a href="#phase2">Phase 2 Analytics</a>
+    <a href="#phase3">Phase 3 Forecasting</a>
+    <a href="#phase4">Phase 4 Video Detection</a>
+  </nav>
 
   <main>
     <section class="cards" id="summaryCards"></section>
 
-    <section class="panel">
+    <section class="panel phase4-callout">
+      <div class="panel-title">
+        <h2>Phase 4 is available: Video Processing and Vehicle Detection</h2>
+        <a class="button-link" href="#phase4">Go to Phase 4 section</a>
+      </div>
+      <p class="hint">Upload a historical traffic video in Data Import, then use the Phase 4 section to sample frames, run CPU-only vehicle-candidate detection, review detections, and export detection CSV.</p>
+    </section>
+
+    <section class="panel" id="phase1">
       <h2>Data Import</h2>
       <div class="grid three">
         <form id="detectorForm" class="upload-card">
@@ -79,7 +93,7 @@
 
 
 
-    <section class="panel">
+    <section class="panel" id="phase2">
       <div class="panel-title">
         <h2>Phase 2: Normalized Detector / Approach Mapping</h2>
         <button onclick="loadDetectorMappings()">Refresh</button>
@@ -141,7 +155,7 @@
 
 
 
-    <section class="panel">
+    <section class="panel" id="phase3">
       <div class="panel-title">
         <h2>Phase 3: Traffic Flow Forecasting</h2>
         <div class="button-row">
@@ -173,7 +187,7 @@
 
 
 
-    <section class="panel">
+    <section class="panel phase4-panel" id="phase4">
       <div class="panel-title">
         <h2>Phase 4: Video Processing and Vehicle Detection</h2>
         <div class="button-row">

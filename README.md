@@ -1,4 +1,4 @@
-# GAM Traffic AI PoC - Phase 2 Working Application
+# GAM Traffic AI PoC - Phase 4 Working Application
 
 This is a Docker-portable, open-source, local web application prototype for the GAM AI-Based Traffic Monitoring and Traffic Flow Forecasting PoC.
 
@@ -125,3 +125,39 @@ Recommended test sequence:
 4. Review the sampled frames, detection metadata, and CSV export.
 
 The current detector is a portable fallback for pipeline testing. It is intentionally not dependent on proprietary services, GPU drivers, or automatic model downloads.
+
+
+## Phase 3 functions
+
+- 15 / 30 / 60-minute traffic flow forecasting
+- Historical-average forecasting model
+- Gradient-boosting forecasting model with fallback behavior
+- Forecast evaluation metrics: MAE, RMSE, MAPE
+- Evaluation-only signal timing recommendations
+- Forecast and recommendation CSV export
+
+
+## Phase 4 functions
+
+- Historical traffic video upload / registration
+- Video metadata probing with OpenCV
+- Frame sampling for dashboard preview
+- CPU-only OpenCV vehicle-candidate detection fallback
+- Vehicle detection metadata storage
+- Detection summary dashboard
+- Vehicle detections CSV export
+
+The Phase 4 section is visible from the top navigation link: **Phase 4 Video Detection**.
+
+
+## Phase 4 API endpoints
+
+```text
+GET  /api/videos
+POST /api/videos/{video_source_id}/sample-frames
+POST /api/videos/{video_source_id}/detect-vehicles
+GET  /api/videos/{video_source_id}/frames
+GET  /api/videos/{video_source_id}/detections
+GET  /api/analytics/video-detection-summary
+GET  /api/export/vehicle-detections.csv
+```
