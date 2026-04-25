@@ -1,4 +1,8 @@
-# GAM Traffic AI PoC - Phase 5 Working Application
+# GAM Traffic AI PoC
+
+## Current increment: RTSP Live Video Preview
+
+This version adds live RTSP/HTTP video source registration and browser display through a backend MJPEG proxy. See `docs/rtsp_live_video.md`. - Phase 5 Working Application
 
 This is a Docker-portable, open-source, local web application prototype for the GAM AI-Based Traffic Monitoring and Traffic Flow Forecasting PoC.
 

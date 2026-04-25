@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 from typing import Annotated
 
+import cv2
+import numpy as np
+
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -244,6 +248,124 @@ def import_video(file: Annotated[UploadFile, File()], db: Annotated[Session, Dep
         db.execute(text("UPDATE ingestion_files SET status='failed', error_message=:err WHERE id=:id"), {"err": str(e), "id": file_id})
         db.commit()
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ---- Real-time RTSP / HTTP video input and browser preview ----
+
+def _make_status_jpeg(message: str, width: int = 960, height: int = 540) -> bytes:
+    img = np.full((height, width, 3), 245, dtype=np.uint8)
+    cv2.putText(img, message[:80], (40, height // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (40, 40, 40), 2, cv2.LINE_AA)
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+    return buf.tobytes() if ok else b""
+
+
+@app.post("/api/rtsp/register")
+def register_rtsp_source(payload: dict, db: Annotated[Session, Depends(get_db)]):
+    url = str(payload.get("rtsp_url") or payload.get("url") or "").strip()
+    camera_code = str(payload.get("camera_code") or "CAM-RTSP-1").strip() or "CAM-RTSP-1"
+    if not url:
+        raise HTTPException(status_code=400, detail="rtsp_url is required")
+    if not (url.lower().startswith("rtsp://") or url.lower().startswith("http://") or url.lower().startswith("https://")):
+        raise HTTPException(status_code=400, detail="Video URL must start with rtsp://, http://, or https://")
+    source_type = "rtsp" if url.lower().startswith("rtsp://") else "http"
+
+    width = height = frame_count = None
+    fps = duration_seconds = None
+    probe_status = "not_checked"
+    try:
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+        if cap.isOpened():
+            width_val = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height_val = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            fps_val = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            width = width_val or None
+            height = height_val or None
+            fps = round(fps_val, 3) if fps_val > 0 else None
+            probe_status = "opened"
+        else:
+            probe_status = "registered_but_not_opened"
+        cap.release()
+    except Exception as exc:
+        probe_status = f"registered_probe_failed: {type(exc).__name__}: {exc}"
+
+    row = db.execute(text("""
+        INSERT INTO video_sources(camera_code, source_type, source_uri, width, height, fps, duration_seconds, frame_count)
+        VALUES (:camera_code, :source_type, :source_uri, :width, :height, :fps, :duration_seconds, :frame_count)
+        RETURNING id
+    """), {
+        "camera_code": camera_code, "source_type": source_type, "source_uri": url,
+        "width": width, "height": height, "fps": fps,
+        "duration_seconds": duration_seconds, "frame_count": frame_count,
+    }).one()
+    db.commit()
+    return {
+        "video_source_id": row.id, "camera_code": camera_code, "source_type": source_type,
+        "stream_url": f"/api/videos/{row.id}/live.mjpg", "probe_status": probe_status,
+        "width": width, "height": height, "fps": fps,
+    }
+
+
+def _stream_mjpeg_from_source(source_uri: str, fps_limit: float = 8.0, max_width: int = 960):
+    boundary = b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\n\r\n"
+    fps_limit = max(1.0, min(float(fps_limit or 8.0), 20.0))
+    frame_interval = 1.0 / fps_limit
+    yield boundary + _make_status_jpeg("Connecting to video source...") + b"\r\n"
+    while True:
+        cap = cv2.VideoCapture(source_uri, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            yield boundary + _make_status_jpeg("Video source not available. Retrying in 5 seconds...") + b"\r\n"
+            time.sleep(5)
+            continue
+        try:
+            last_sent = 0.0
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                now = time.time()
+                if now - last_sent < frame_interval:
+                    continue
+                last_sent = now
+                h, w = frame.shape[:2]
+                if max_width and w > max_width:
+                    new_h = int(h * (max_width / w))
+                    frame = cv2.resize(frame, (max_width, new_h), interpolation=cv2.INTER_AREA)
+                cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2, cv2.LINE_AA)
+                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if ok:
+                    yield boundary + buf.tobytes() + b"\r\n"
+        finally:
+            cap.release()
+        yield boundary + _make_status_jpeg("Stream interrupted. Reconnecting in 5 seconds...") + b"\r\n"
+        time.sleep(5)
+
+
+@app.get("/api/videos/{video_source_id}/live.mjpg")
+def live_mjpeg(video_source_id: int, db: Annotated[Session, Depends(get_db)], fps_limit: float = 8.0, max_width: int = 960):
+    row = db.execute(text("SELECT source_uri, source_type FROM video_sources WHERE id=:id"), {"id": video_source_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video source not found")
+    if row["source_type"] not in {"rtsp", "http", "file"}:
+        raise HTTPException(status_code=400, detail="Unsupported video source type")
+    return StreamingResponse(
+        _stream_mjpeg_from_source(row["source_uri"], fps_limit=fps_limit, max_width=max_width),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/api/videos/{video_source_id}/stream-info")
+def stream_info(video_source_id: int, db: Annotated[Session, Depends(get_db)]):
+    row = db.execute(text("""
+        SELECT id, camera_code, source_type, source_uri, width, height, fps, created_at
+        FROM video_sources WHERE id=:id
+    """), {"id": video_source_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video source not found")
+    d = dict(row)
+    d["created_at"] = d["created_at"].isoformat() if d.get("created_at") else None
+    d["browser_stream_url"] = f"/api/videos/{video_source_id}/live.mjpg"
+    return d
 
 
 @app.get("/api/detector-counts")

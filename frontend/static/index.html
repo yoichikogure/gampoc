@@ -19,6 +19,7 @@
     <a href="#phase2">Phase 2 Analytics</a>
     <a href="#phase3">Phase 3 Forecasting</a>
     <a href="#phase4">Phase 4 Video Detection</a>
+    <a href="#realtime">RTSP Live View</a>
     <a href="#phase5">Phase 5 Incident Review</a>
   </nav>
 
@@ -53,6 +54,13 @@
           <input type="file" name="file" accept="video/*" required />
           <button>Register video</button>
           <pre id="videoResult"></pre>
+        </form>
+        <form id="rtspForm" class="upload-card">
+          <h3>RTSP / HTTP Live Video</h3>
+          <input type="text" name="camera_code" value="CAM-RTSP-1" placeholder="Camera code" />
+          <input type="url" name="rtsp_url" placeholder="rtsp://user:password@host:554/stream" required />
+          <button>Register RTSP source</button>
+          <pre id="rtspResult"></pre>
         </form>
       </div>
     </section>
@@ -184,6 +192,23 @@
       <p class="hint"><strong>Evaluation only:</strong> these recommendations are decision-support outputs and are not connected to GAM's operational traffic signal control system.</p>
       <pre id="recommendationRunResult"></pre>
       <table id="recommendationTable"></table>
+    </section>
+
+
+
+    <section class="panel phase4-panel" id="realtime">
+      <div class="panel-title">
+        <h2>RTSP Live Video Preview</h2>
+        <div class="button-row">
+          <button onclick="loadVideos()">Refresh sources</button>
+          <button onclick="stopLiveStream()">Stop live preview</button>
+        </div>
+      </div>
+      <p class="hint">Browsers cannot display RTSP directly, so the backend converts the selected RTSP/HTTP source into an MJPEG stream. This is for local PoC monitoring only.</p>
+      <div id="liveSourceInfo" class="hint">Register or select an RTSP source from the video table.</div>
+      <div class="live-video-box">
+        <img id="liveVideo" alt="Live video preview" />
+      </div>
     </section>
 
 

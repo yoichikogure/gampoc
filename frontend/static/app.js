@@ -173,6 +173,8 @@ async function refreshAll() {
 upload('detectorForm', '/api/import/detector-log', 'detectorResult');
 upload('signalForm', '/api/import/signal-log', 'signalResult');
 upload('videoForm', '/api/import/video', 'videoResult');
+setupRtspForm();
+
 refreshAll().catch(console.error);
 
 // ---- Phase 3: forecasting and decision-support recommendations ----
@@ -236,6 +238,50 @@ async function refreshPhase3() {
 refreshPhase3().catch(console.error);
 
 
+
+async function setupRtspForm() {
+  const form = document.getElementById('rtspForm');
+  const out = document.getElementById('rtspResult');
+  if (!form || !out) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    out.textContent = 'Registering RTSP source...';
+    const body = Object.fromEntries(new FormData(form).entries());
+    try {
+      const data = await api('/api/rtsp/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      out.textContent = JSON.stringify(data, null, 2);
+      selectedVideoId = data.video_source_id;
+      await loadVideos();
+      startLiveStream(data.video_source_id);
+    } catch (err) {
+      out.textContent = err.message;
+    }
+  });
+}
+
+function startLiveStream(id) {
+  const img = document.getElementById('liveVideo');
+  const info = document.getElementById('liveSourceInfo');
+  if (!img) return;
+  selectedVideoId = id;
+  const url = `/api/videos/${id}/live.mjpg?fps_limit=8&max_width=960&cache_bust=${Date.now()}`;
+  img.src = url;
+  if (info) info.textContent = `Showing live preview for video source ID ${id}.`;
+  const section = document.getElementById('realtime');
+  if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function stopLiveStream() {
+  const img = document.getElementById('liveVideo');
+  const info = document.getElementById('liveSourceInfo');
+  if (img) img.removeAttribute('src');
+  if (info) info.textContent = 'Live preview stopped.';
+}
+
 // ---- Phase 4: video processing and vehicle-candidate detection ----
 let selectedVideoId = null;
 
@@ -244,7 +290,9 @@ async function loadVideos() {
   if (rows.length && !selectedVideoId) selectedVideoId = rows[0].id;
   const enriched = rows.map(r => ({
     ...r,
-    actions: `<button onclick="sampleFrames(${r.id})">Sample frames</button> <button onclick="detectVehicles(${r.id})">Detect vehicles</button> <button onclick="selectVideo(${r.id})">View</button>`
+    actions: r.source_type === 'file'
+      ? `<button onclick="sampleFrames(${r.id})">Sample frames</button> <button onclick="detectVehicles(${r.id})">Detect vehicles</button> <button onclick="selectVideo(${r.id})">View</button> <button onclick="startLiveStream(${r.id})">Preview</button>`
+      : `<button onclick="startLiveStream(${r.id})">View live</button> <button onclick="selectVideo(${r.id})">Select</button>`
   }));
   renderTable('videoTable', enriched, [
     {key:'id', label:'ID'}, {key:'camera_code', label:'Camera'}, {key:'source_type', label:'Type'},
