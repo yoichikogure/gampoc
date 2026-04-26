@@ -1,4 +1,4 @@
-# GAM Traffic AI PoC — Shareable Prototype Package
+# GAM Traffic AI PoC — Minimum Prototype Package
 
 This repository contains a Docker-portable, open-source prototype application for the **GAM AI-Based Traffic Monitoring and Traffic Flow Forecasting PoC**.
 
@@ -287,6 +287,7 @@ Install:
 From the project directory:
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
