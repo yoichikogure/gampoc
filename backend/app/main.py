@@ -12,11 +12,11 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import text, create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from .config import APP_TITLE, DATA_ROOT, FRONTEND_ROOT
+from .config import APP_TITLE, DATA_ROOT, FRONTEND_ROOT, DATABASE_URL
 from .database import get_db
 from .services.detector_log_parser import parse_detector_log
 from .services.signal_log_parser import parse_signal_log
@@ -26,7 +26,7 @@ from .services.incident_detection import generate_incident_candidates
 from .services.forecasting import evaluate_forecast_models, generate_forecasts
 from .services.recommendation import generate_signal_recommendations
 
-app = FastAPI(title=APP_TITLE, version="0.5.0")
+app = FastAPI(title=APP_TITLE, version="0.6.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -89,6 +89,22 @@ def ensure_phase5_tables():
     ALTER TABLE incident_events ADD COLUMN IF NOT EXISTS detection_method TEXT DEFAULT 'rule_based_phase5';
     CREATE INDEX IF NOT EXISTS idx_incident_events_video ON incident_events(video_source_id, frame_index);
     CREATE INDEX IF NOT EXISTS idx_incident_events_review ON incident_events(review_status, event_type);
+    CREATE TABLE IF NOT EXISTS live_stream_health (
+      video_source_id INT PRIMARY KEY REFERENCES video_sources(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      connected BOOLEAN NOT NULL DEFAULT false,
+      input_fps NUMERIC,
+      output_fps NUMERIC,
+      frames_read BIGINT NOT NULL DEFAULT 0,
+      frames_sent BIGINT NOT NULL DEFAULT 0,
+      detections_logged BIGINT NOT NULL DEFAULT 0,
+      dropped_frames BIGINT NOT NULL DEFAULT 0,
+      reconnect_count INT NOT NULL DEFAULT 0,
+      last_frame_at TIMESTAMPTZ,
+      last_error TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_live_stream_health_updated ON live_stream_health(updated_at);
     """
     with engine.begin() as conn:
         for stmt in [x.strip() for x in ddl.split(";") if x.strip()]:
@@ -366,6 +382,210 @@ def stream_info(video_source_id: int, db: Annotated[Session, Depends(get_db)]):
     d["created_at"] = d["created_at"].isoformat() if d.get("created_at") else None
     d["browser_stream_url"] = f"/api/videos/{video_source_id}/live.mjpg"
     return d
+
+
+# ---- Phase 6: real-time RTSP AI overlay, detection logging, and health ----
+
+_PHASE6_ENGINE = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
+
+
+def _update_live_health(video_source_id: int, **values):
+    payload = {
+        "video_source_id": int(video_source_id),
+        "status": values.get("status", "running"),
+        "connected": bool(values.get("connected", False)),
+        "input_fps": values.get("input_fps"),
+        "output_fps": values.get("output_fps"),
+        "frames_read": int(values.get("frames_read", 0) or 0),
+        "frames_sent": int(values.get("frames_sent", 0) or 0),
+        "detections_logged": int(values.get("detections_logged", 0) or 0),
+        "dropped_frames": int(values.get("dropped_frames", 0) or 0),
+        "reconnect_count": int(values.get("reconnect_count", 0) or 0),
+        "last_error": values.get("last_error"),
+    }
+    try:
+        with _PHASE6_ENGINE.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO live_stream_health(
+                  video_source_id, status, connected, input_fps, output_fps, frames_read,
+                  frames_sent, detections_logged, dropped_frames, reconnect_count,
+                  last_frame_at, last_error, updated_at
+                ) VALUES (
+                  :video_source_id, :status, :connected, :input_fps, :output_fps, :frames_read,
+                  :frames_sent, :detections_logged, :dropped_frames, :reconnect_count,
+                  CASE WHEN :connected THEN now() ELSE NULL END, :last_error, now()
+                )
+                ON CONFLICT (video_source_id) DO UPDATE SET
+                  status=EXCLUDED.status,
+                  connected=EXCLUDED.connected,
+                  input_fps=EXCLUDED.input_fps,
+                  output_fps=EXCLUDED.output_fps,
+                  frames_read=EXCLUDED.frames_read,
+                  frames_sent=EXCLUDED.frames_sent,
+                  detections_logged=EXCLUDED.detections_logged,
+                  dropped_frames=EXCLUDED.dropped_frames,
+                  reconnect_count=EXCLUDED.reconnect_count,
+                  last_frame_at=CASE WHEN EXCLUDED.connected THEN now() ELSE live_stream_health.last_frame_at END,
+                  last_error=EXCLUDED.last_error,
+                  updated_at=now()
+            """), payload)
+    except Exception:
+        pass
+
+
+def _detect_motion_boxes(frame, subtractor, min_area: int = 900, max_boxes: int = 12):
+    fg = subtractor.apply(frame)
+    fg = cv2.medianBlur(fg, 5)
+    _, thresh = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    thresh = cv2.dilate(thresh, kernel, iterations=2)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < min_area:
+            continue
+        x, y, w, h = cv2.boundingRect(c)
+        frame_area = frame.shape[0] * frame.shape[1]
+        if area > frame_area * 0.35 or w < 12 or h < 12:
+            continue
+        boxes.append((int(x), int(y), int(w), int(h), float(area)))
+    boxes.sort(key=lambda b: b[4], reverse=True)
+    return boxes[:max_boxes]
+
+
+def _log_live_detections(video_source_id: int, frame_index: int, frame_time_seconds: float, boxes, every_n: int = 10):
+    if not boxes or frame_index % max(1, int(every_n)) != 0:
+        return 0
+    logged = 0
+    try:
+        with _PHASE6_ENGINE.begin() as conn:
+            for x, y, w, h, area in boxes:
+                confidence = min(0.95, max(0.25, area / 12000.0))
+                conn.execute(text("""
+                    INSERT INTO vehicle_detections(
+                      video_source_id, frame_index, frame_time_seconds, class_name, confidence,
+                      bbox_x, bbox_y, bbox_w, bbox_h, detection_method
+                    ) VALUES (
+                      :video_source_id, :frame_index, :frame_time_seconds, 'vehicle_candidate', :confidence,
+                      :x, :y, :w, :h, 'opencv_rtsp_motion_phase6'
+                    )
+                """), {
+                    "video_source_id": int(video_source_id),
+                    "frame_index": int(frame_index),
+                    "frame_time_seconds": float(frame_time_seconds),
+                    "confidence": float(confidence),
+                    "x": x, "y": y, "w": w, "h": h,
+                })
+                logged += 1
+    except Exception:
+        return 0
+    return logged
+
+
+def _stream_ai_mjpeg_from_source(video_source_id: int, source_uri: str, fps_limit: float = 5.0, max_width: int = 960, min_area: int = 900, log_every_n: int = 10):
+    boundary = b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\n\r\n"
+    fps_limit = max(1.0, min(float(fps_limit or 5.0), 15.0))
+    frame_interval = 1.0 / fps_limit
+    reconnect_count = 0
+    frames_read = frames_sent = detections_logged = dropped_frames = 0
+    started_at = time.time()
+    yield boundary + _make_status_jpeg("Connecting to RTSP AI stream...") + b"\r\n"
+    while True:
+        cap = cv2.VideoCapture(source_uri, cv2.CAP_FFMPEG)
+        input_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0) if cap.isOpened() else None
+        if not cap.isOpened():
+            reconnect_count += 1
+            _update_live_health(video_source_id, status="reconnecting", connected=False, input_fps=input_fps, frames_read=frames_read, frames_sent=frames_sent, detections_logged=detections_logged, dropped_frames=dropped_frames, reconnect_count=reconnect_count, last_error="Could not open video source")
+            yield boundary + _make_status_jpeg("AI stream source not available. Retrying in 5 seconds...") + b"\r\n"
+            time.sleep(5)
+            continue
+        subtractor = cv2.createBackgroundSubtractorMOG2(history=120, varThreshold=32, detectShadows=True)
+        last_sent = 0.0
+        last_health = 0.0
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    reconnect_count += 1
+                    _update_live_health(video_source_id, status="interrupted", connected=False, input_fps=input_fps, frames_read=frames_read, frames_sent=frames_sent, detections_logged=detections_logged, dropped_frames=dropped_frames, reconnect_count=reconnect_count, last_error="Frame read failed")
+                    break
+                frames_read += 1
+                now = time.time()
+                if now - last_sent < frame_interval:
+                    dropped_frames += 1
+                    continue
+                last_sent = now
+                h0, w0 = frame.shape[:2]
+                if max_width and w0 > max_width:
+                    frame = cv2.resize(frame, (max_width, int(h0 * (max_width / w0))), interpolation=cv2.INTER_AREA)
+                boxes = _detect_motion_boxes(frame, subtractor, min_area=int(min_area), max_boxes=12)
+                detections_logged += _log_live_detections(video_source_id, frames_read, now - started_at, boxes, every_n=log_every_n)
+                for x, y, w, h, area in boxes:
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 220, 0), 2)
+                    cv2.putText(frame, "vehicle_candidate", (x, max(18, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 2, cv2.LINE_AA)
+                status = f"PHASE 6 LIVE AI | boxes: {len(boxes)} | read: {frames_read} | logged: {detections_logged}"
+                cv2.rectangle(frame, (0, 0), (frame.shape[1], 34), (0, 0, 0), -1)
+                cv2.putText(frame, status, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+                if ok:
+                    frames_sent += 1
+                    yield boundary + buf.tobytes() + b"\r\n"
+                if now - last_health > 2.0:
+                    elapsed = max(now - started_at, 0.001)
+                    _update_live_health(video_source_id, status="running_ai_overlay", connected=True, input_fps=input_fps, output_fps=round(frames_sent / elapsed, 3), frames_read=frames_read, frames_sent=frames_sent, detections_logged=detections_logged, dropped_frames=dropped_frames, reconnect_count=reconnect_count, last_error=None)
+                    last_health = now
+        finally:
+            cap.release()
+        yield boundary + _make_status_jpeg("AI stream interrupted. Reconnecting in 5 seconds...") + b"\r\n"
+        time.sleep(5)
+
+
+@app.get("/api/videos/{video_source_id}/live-ai.mjpg")
+def live_ai_mjpeg(video_source_id: int, db: Annotated[Session, Depends(get_db)], fps_limit: float = 5.0, max_width: int = 960, min_area: int = 900, log_every_n: int = 10):
+    row = db.execute(text("SELECT source_uri, source_type FROM video_sources WHERE id=:id"), {"id": video_source_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Video source not found")
+    if row["source_type"] not in {"rtsp", "http", "file"}:
+        raise HTTPException(status_code=400, detail="Unsupported video source type")
+    return StreamingResponse(
+        _stream_ai_mjpeg_from_source(video_source_id, row["source_uri"], fps_limit=fps_limit, max_width=max_width, min_area=min_area, log_every_n=log_every_n),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/api/videos/{video_source_id}/live-health")
+def live_health(video_source_id: int, db: Annotated[Session, Depends(get_db)]):
+    row = db.execute(text("""
+        SELECT video_source_id, status, connected, input_fps, output_fps, frames_read,
+               frames_sent, detections_logged, dropped_frames, reconnect_count,
+               last_frame_at, last_error, updated_at
+        FROM live_stream_health WHERE video_source_id=:id
+    """), {"id": video_source_id}).mappings().first()
+    if not row:
+        return {"video_source_id": video_source_id, "status": "not_started", "connected": False}
+    d = dict(row)
+    for k in ["last_frame_at", "updated_at"]:
+        d[k] = d[k].isoformat() if d.get(k) else None
+    for k in ["input_fps", "output_fps"]:
+        d[k] = float(d[k]) if d.get(k) is not None else None
+    return d
+
+
+@app.get("/api/videos/{video_source_id}/live-detections")
+def live_detections(video_source_id: int, db: Annotated[Session, Depends(get_db)], limit: int = 200):
+    rows = db.execute(text("""
+        SELECT id, video_source_id, frame_index, frame_time_seconds, class_name,
+               round(confidence::numeric, 3) AS confidence, bbox_x, bbox_y, bbox_w, bbox_h,
+               detection_method, created_at
+        FROM vehicle_detections
+        WHERE video_source_id=:id AND detection_method='opencv_rtsp_motion_phase6'
+        ORDER BY id DESC
+        LIMIT :limit
+    """), {"id": video_source_id, "limit": limit}).mappings().all()
+    return [{**dict(r), "created_at": r["created_at"].isoformat() if r.get("created_at") else None} for r in rows]
 
 
 @app.get("/api/detector-counts")

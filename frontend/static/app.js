@@ -271,6 +271,8 @@ function startLiveStream(id) {
   const url = `/api/videos/${id}/live.mjpg?fps_limit=8&max_width=960&cache_bust=${Date.now()}`;
   img.src = url;
   if (info) info.textContent = `Showing live preview for video source ID ${id}.`;
+  const aiInfo = document.getElementById('liveAiSourceInfo');
+  if (aiInfo) aiInfo.textContent = `Selected video source ID ${id}. Click Start live AI overlay to run detection.`;
   const section = document.getElementById('realtime');
   if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -282,6 +284,60 @@ function stopLiveStream() {
   if (info) info.textContent = 'Live preview stopped.';
 }
 
+
+
+// ---- Phase 6: real-time RTSP AI overlay ----
+let liveAiTimer = null;
+
+function startLiveAiStream(id) {
+  if (!id) {
+    const info = document.getElementById('liveAiSourceInfo');
+    if (info) info.textContent = 'No video source is selected. Register or select an RTSP/HTTP source first.';
+    return;
+  }
+  selectedVideoId = id;
+  const img = document.getElementById('liveAiVideo');
+  const info = document.getElementById('liveAiSourceInfo');
+  if (!img) return;
+  img.src = `/api/videos/${id}/live-ai.mjpg?fps_limit=5&max_width=960&min_area=900&log_every_n=10&cache_bust=${Date.now()}`;
+  if (info) info.textContent = `Running live AI overlay for video source ID ${id}. Detection rows are logged periodically.`;
+  const section = document.getElementById('phase6');
+  if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (liveAiTimer) clearInterval(liveAiTimer);
+  liveAiTimer = setInterval(loadLiveAiStatus, 3000);
+  loadLiveAiStatus().catch(console.error);
+}
+
+function stopLiveAiStream() {
+  const img = document.getElementById('liveAiVideo');
+  const info = document.getElementById('liveAiSourceInfo');
+  if (img) img.removeAttribute('src');
+  if (info) info.textContent = 'Live AI overlay stopped. Health table shows the last recorded status.';
+  if (liveAiTimer) clearInterval(liveAiTimer);
+  liveAiTimer = null;
+}
+
+async function loadLiveAiStatus() {
+  if (!selectedVideoId) return;
+  const [health, detections] = await Promise.all([
+    api(`/api/videos/${selectedVideoId}/live-health`),
+    api(`/api/videos/${selectedVideoId}/live-detections?limit=100`)
+  ]);
+  renderTable('liveHealthTable', [health], [
+    {key:'video_source_id', label:'Video'}, {key:'status', label:'Status'}, {key:'connected', label:'Connected'},
+    {key:'input_fps', label:'Input FPS'}, {key:'output_fps', label:'Output FPS'},
+    {key:'frames_read', label:'Frames read'}, {key:'frames_sent', label:'Frames sent'},
+    {key:'detections_logged', label:'Detections logged'}, {key:'dropped_frames', label:'Skipped frames'},
+    {key:'reconnect_count', label:'Reconnects'}, {key:'last_error', label:'Last error'}, {key:'updated_at', label:'Updated'}
+  ]);
+  renderTable('liveDetectionTable', detections, [
+    {key:'id', label:'ID'}, {key:'frame_index', label:'Frame'}, {key:'frame_time_seconds', label:'Sec'},
+    {key:'class_name', label:'Class'}, {key:'confidence', label:'Confidence'},
+    {key:'bbox_x', label:'X'}, {key:'bbox_y', label:'Y'}, {key:'bbox_w', label:'W'}, {key:'bbox_h', label:'H'},
+    {key:'created_at', label:'Created'}
+  ]);
+}
+
 // ---- Phase 4: video processing and vehicle-candidate detection ----
 let selectedVideoId = null;
 
@@ -291,8 +347,8 @@ async function loadVideos() {
   const enriched = rows.map(r => ({
     ...r,
     actions: r.source_type === 'file'
-      ? `<button onclick="sampleFrames(${r.id})">Sample frames</button> <button onclick="detectVehicles(${r.id})">Detect vehicles</button> <button onclick="selectVideo(${r.id})">View</button> <button onclick="startLiveStream(${r.id})">Preview</button>`
-      : `<button onclick="startLiveStream(${r.id})">View live</button> <button onclick="selectVideo(${r.id})">Select</button>`
+      ? `<button onclick="sampleFrames(${r.id})">Sample frames</button> <button onclick="detectVehicles(${r.id})">Detect vehicles</button> <button onclick="selectVideo(${r.id})">View</button> <button onclick="startLiveStream(${r.id})">Preview</button> <button onclick="startLiveAiStream(${r.id})">Live AI</button>`
+      : `<button onclick="startLiveStream(${r.id})">View live</button> <button onclick="startLiveAiStream(${r.id})">Live AI</button> <button onclick="selectVideo(${r.id})">Select</button>`
   }));
   renderTable('videoTable', enriched, [
     {key:'id', label:'ID'}, {key:'camera_code', label:'Camera'}, {key:'source_type', label:'Type'},

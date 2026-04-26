@@ -7,270 +7,278 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
+  <header class="app-header">
     <div>
       <h1>GAM Traffic AI PoC</h1>
-      <p>Standalone local dashboard for traffic data ingestion, analytics, forecasting, and incident detection development.</p>
+      <p>Standalone local prototype for traffic data ingestion, live video monitoring, forecasting, decision support, and incident review.</p>
     </div>
     <div class="badge">Evaluation only — no signal control connection</div>
   </header>
+
   <nav class="phase-nav">
-    <a href="#phase1">Data Import</a>
-    <a href="#phase2">Phase 2 Analytics</a>
-    <a href="#phase3">Phase 3 Forecasting</a>
-    <a href="#phase4">Phase 4 Video Detection</a>
-    <a href="#realtime">RTSP Live View</a>
-    <a href="#phase5">Phase 5 Incident Review</a>
+    <a href="#live-dashboard">Live Dashboard</a>
+    <a href="#data-input">Data Input</a>
+    <a href="#forecasting">Forecasting</a>
+    <a href="#incidents">Incidents</a>
+    <a href="#historical">Historical Analytics</a>
+    <a href="#video-processing">Video Processing</a>
+    <a href="#system">System</a>
   </nav>
 
   <main>
-    <section class="cards" id="summaryCards"></section>
+    <section class="status-strip" id="summaryCards"></section>
 
-    <section class="panel phase4-callout">
-      <div class="panel-title">
-        <h2>Phase 5 is available: Incident Detection and Human Review</h2>
-        <a class="button-link" href="#phase5">Go to Phase 5 section</a>
-      </div>
-      <p class="hint">Upload a historical traffic video, run Phase 4 detection, then use Phase 5 to generate incident candidates, review them as confirmed / false positive / uncertain, and export incident logs.</p>
+    <section class="hero-grid" id="live-dashboard">
+      <article class="video-stage live-primary" id="phase6">
+        <div class="panel-title compact-title">
+          <div>
+            <h2>Live AI Video Overlay</h2>
+            <p class="hint">Primary operator view. Select or register an RTSP/HTTP source, then start the live AI overlay.</p>
+          </div>
+          <div class="button-row">
+            <button onclick="startLiveAiStream(selectedVideoId)">Start Live AI</button>
+            <button class="secondary" onclick="stopLiveAiStream()">Stop</button>
+          </div>
+        </div>
+        <div id="liveAiSourceInfo" class="status-note">Register or select an RTSP/HTTP source, then click Start Live AI.</div>
+        <div class="live-video-box large-video">
+          <img id="liveAiVideo" alt="Live AI overlay preview" />
+        </div>
+      </article>
+
+      <aside class="side-stack">
+        <article class="panel control-panel" id="data-input">
+          <h2>Live Source</h2>
+          <form id="rtspForm" class="stacked-form">
+            <label>Camera code</label>
+            <input type="text" name="camera_code" value="CAM-RTSP-1" placeholder="Camera code" />
+            <label>RTSP / HTTP URL</label>
+            <input type="url" name="rtsp_url" placeholder="rtsp://user:password@host:554/stream" required />
+            <button>Register RTSP source</button>
+          </form>
+          <pre id="rtspResult" class="mini-log"></pre>
+          <div class="button-row top-gap">
+            <button onclick="loadVideos()">Refresh sources</button>
+            <button onclick="startLiveStream(selectedVideoId)">Raw preview</button>
+          </div>
+        </article>
+
+        <article class="panel control-panel" id="realtime">
+          <h2>Raw Live Preview</h2>
+          <div id="liveSourceInfo" class="status-note">Raw preview is optional. The AI overlay is the main view.</div>
+          <div class="live-video-box small-video">
+            <img id="liveVideo" alt="Raw live video preview" />
+          </div>
+          <button class="secondary full-width" onclick="stopLiveStream()">Stop raw preview</button>
+        </article>
+
+        <article class="panel control-panel">
+          <div class="panel-title compact-title">
+            <h2>Live Health</h2>
+            <button onclick="loadLiveAiStatus()">Refresh</button>
+          </div>
+          <div class="table-scroll small-scroll">
+            <table id="liveHealthTable"></table>
+          </div>
+        </article>
+      </aside>
     </section>
 
-    <section class="panel" id="phase1">
-      <h2>Data Import</h2>
-      <div class="grid three">
+    <section class="panel compact-section">
+      <div class="panel-title">
+        <h2>Data Import</h2>
+        <p class="hint no-margin">Use sample files in <code>docs/</code> for demonstration.</p>
+      </div>
+      <div class="grid four">
         <form id="detectorForm" class="upload-card">
           <h3>SCATS Detector Log</h3>
           <input type="file" name="file" accept=".txt,.log,.csv" required />
           <button>Import detector log</button>
-          <pre id="detectorResult"></pre>
+          <pre id="detectorResult" class="mini-log"></pre>
         </form>
         <form id="signalForm" class="upload-card">
           <h3>Signal Timing Log</h3>
           <input type="file" name="file" accept=".txt,.log,.csv" required />
           <button>Import signal log</button>
-          <pre id="signalResult"></pre>
+          <pre id="signalResult" class="mini-log"></pre>
         </form>
         <form id="videoForm" class="upload-card">
           <h3>Historical Video</h3>
           <input type="file" name="file" accept="video/*" required />
           <button>Register video</button>
-          <pre id="videoResult"></pre>
+          <pre id="videoResult" class="mini-log"></pre>
         </form>
-        <form id="rtspForm" class="upload-card">
-          <h3>RTSP / HTTP Live Video</h3>
-          <input type="text" name="camera_code" value="CAM-RTSP-1" placeholder="Camera code" />
-          <input type="url" name="rtsp_url" placeholder="rtsp://user:password@host:554/stream" required />
-          <button>Register RTSP source</button>
-          <pre id="rtspResult"></pre>
-        </form>
+        <div class="upload-card warning-card">
+          <h3>Prototype Notice</h3>
+          <p class="hint">Live AI uses a lightweight OpenCV motion-based detector. It is for pipeline demonstration, not certified incident detection.</p>
+        </div>
       </div>
     </section>
 
-    <section class="grid two">
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Traffic Count Chart</h2>
+    <section class="grid two" id="forecasting">
+      <details class="panel details-panel" open>
+        <summary>Traffic Flow Forecasting</summary>
+        <div class="panel-title compact-title">
+          <p class="hint">Forecasts are generated for 15, 30, and 60 minutes ahead by approach.</p>
+          <div class="button-row">
+            <button onclick="runForecast('historical_average')">Historical average</button>
+            <button onclick="runForecast('gradient_boosting')">Gradient boosting</button>
+            <a class="button-link" href="/api/export/forecast-results.csv">Export CSV</a>
+          </div>
+        </div>
+        <pre id="forecastRunResult" class="mini-log"></pre>
+        <h3>Back-test Metrics</h3>
+        <div class="table-scroll medium-scroll"><table id="forecastEvaluationTable"></table></div>
+        <h3>Latest Forecast Results</h3>
+        <div class="table-scroll medium-scroll"><table id="forecastResultsTable"></table></div>
+      </details>
+
+      <details class="panel details-panel" open>
+        <summary>Signal Timing Recommendations</summary>
+        <div class="panel-title compact-title">
+          <p class="hint"><strong>Evaluation only:</strong> recommendations are not connected to signal controllers.</p>
+          <div class="button-row">
+            <button onclick="generateRecommendations()">Generate</button>
+            <a class="button-link" href="/api/export/signal-recommendations.csv">Export CSV</a>
+          </div>
+        </div>
+        <pre id="recommendationRunResult" class="mini-log"></pre>
+        <div class="table-scroll large-scroll"><table id="recommendationTable"></table></div>
+      </details>
+    </section>
+
+    <section class="grid two" id="incidents">
+      <details class="panel details-panel" open>
+        <summary>Incident Detection and Human Review</summary>
+        <div class="panel-title compact-title">
+          <p class="hint">Generate explainable candidates from detections, then review them manually.</p>
+          <div class="button-row">
+            <button onclick="detectIncidentsForSelectedVideo()">Detect candidates</button>
+            <button onclick="loadIncidents()">Refresh</button>
+            <a class="button-link" href="/api/export/incidents.csv">Export CSV</a>
+          </div>
+        </div>
+        <pre id="incidentRunResult" class="mini-log"></pre>
+        <div class="grid two inner-grid">
+          <div>
+            <h3>Incident Summary</h3>
+            <div class="table-scroll medium-scroll"><table id="incidentSummaryTable"></table></div>
+          </div>
+          <div>
+            <h3>Incident Snapshot</h3>
+            <div id="incidentSnapshot" class="snapshot-box"><p class="hint">Click “View” in the incident table to show a snapshot.</p></div>
+          </div>
+        </div>
+        <h3>Incident Event Review</h3>
+        <div class="table-scroll large-scroll"><table id="incidentTable"></table></div>
+      </details>
+
+      <details class="panel details-panel" open>
+        <summary>Recent Live AI Detections</summary>
+        <p class="hint">Logged periodically while the live AI overlay is running.</p>
+        <div class="table-scroll large-scroll"><table id="liveDetectionTable"></table></div>
+      </details>
+    </section>
+
+    <section class="grid two" id="video-processing">
+      <details class="panel details-panel" open>
+        <summary>Video Sources and Historical Video Processing</summary>
+        <div class="panel-title compact-title">
+          <p class="hint">Use uploaded videos for repeatable testing of frame sampling, detection, and incident candidate generation.</p>
+          <div class="button-row">
+            <button onclick="loadVideos()">Refresh videos</button>
+            <a class="button-link" href="/api/export/vehicle-detections.csv">Export detections CSV</a>
+          </div>
+        </div>
+        <div class="table-scroll medium-scroll"><table id="videoTable"></table></div>
+        <pre id="videoProcessResult" class="mini-log"></pre>
+        <div class="grid two inner-grid">
+          <div>
+            <h3>Sampled Frames</h3>
+            <div id="frameGallery" class="frame-gallery scroll-gallery"></div>
+          </div>
+          <div>
+            <h3>Detection Summary</h3>
+            <div class="table-scroll medium-scroll"><table id="videoDetectionSummaryTable"></table></div>
+          </div>
+        </div>
+        <h3>Latest Vehicle-Candidate Detections</h3>
+        <div class="table-scroll medium-scroll"><table id="vehicleDetectionTable"></table></div>
+      </details>
+
+      <details class="panel details-panel" open>
+        <summary>Traffic Count Chart</summary>
+        <div class="panel-title compact-title">
+          <p class="hint">Quick visual check of imported detector counts.</p>
           <button onclick="loadDetectorChart()">Refresh</button>
         </div>
         <canvas id="countCanvas" width="900" height="320"></canvas>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Signal Phase Summary</h2>
-          <button onclick="loadSignalSummary()">Refresh</button>
-        </div>
-        <table id="signalSummaryTable"></table>
-      </div>
+      </details>
     </section>
 
-    <section class="grid two">
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Latest Detector Counts</h2>
-          <button onclick="loadDetectorRows()">Refresh</button>
-        </div>
-        <table id="detectorTable"></table>
-      </div>
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Latest Signal Events</h2>
-          <button onclick="loadSignalRows()">Refresh</button>
-        </div>
-        <table id="signalTable"></table>
-      </div>
-    </section>
+    <section id="historical" class="historical-grid">
+      <details class="panel details-panel">
+        <summary>Latest Detector Counts</summary>
+        <button onclick="loadDetectorRows()">Refresh</button>
+        <div class="table-scroll large-scroll"><table id="detectorTable"></table></div>
+      </details>
 
+      <details class="panel details-panel">
+        <summary>Latest Signal Events</summary>
+        <button onclick="loadSignalRows()">Refresh</button>
+        <div class="table-scroll large-scroll"><table id="signalTable"></table></div>
+      </details>
 
-
-    <section class="panel" id="phase2">
-      <div class="panel-title">
-        <h2>Phase 2: Normalized Detector / Approach Mapping</h2>
+      <details class="panel details-panel">
+        <summary>Normalized Detector / Approach Mapping</summary>
+        <p class="hint">Default mapping covers Wadi Saqra INT 806 with 4 approaches × 5 detectors plus 2 extra detectors.</p>
         <button onclick="loadDetectorMappings()">Refresh</button>
-      </div>
-      <p class="hint">Default mapping covers Wadi Saqra INT 806 with 4 approaches × 5 detectors plus 2 extra detectors. Use the API endpoint <code>POST /api/mappings/detectors</code> to refine lane labels after GAM confirms the exact layout.</p>
-      <table id="mappingTable"></table>
-    </section>
+        <div class="table-scroll large-scroll"><table id="mappingTable"></table></div>
+      </details>
 
-    <section class="grid two">
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Daily Traffic Summary</h2>
-          <a class="button-link" href="/api/export/detector-counts.csv">Export normalized CSV</a>
-        </div>
-        <table id="dailySummaryTable"></table>
-      </div>
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Peak Hour by Approach</h2>
-          <button onclick="loadPeakSummary()">Refresh</button>
-        </div>
-        <table id="peakSummaryTable"></table>
-      </div>
-    </section>
+      <details class="panel details-panel">
+        <summary>Daily Traffic Summary</summary>
+        <a class="button-link" href="/api/export/detector-counts.csv">Export normalized CSV</a>
+        <div class="table-scroll large-scroll"><table id="dailySummaryTable"></table></div>
+      </details>
 
-    <section class="panel">
-      <div class="panel-title">
-        <h2>Hourly Traffic Summary</h2>
+      <details class="panel details-panel">
+        <summary>Hourly Traffic Summary</summary>
         <a class="button-link" href="/api/export/hourly-summary.csv">Export hourly CSV</a>
-      </div>
-      <table id="hourlySummaryTable"></table>
+        <div class="table-scroll large-scroll"><table id="hourlySummaryTable"></table></div>
+      </details>
+
+      <details class="panel details-panel">
+        <summary>Peak Hour by Approach</summary>
+        <button onclick="loadPeakSummary()">Refresh</button>
+        <div class="table-scroll large-scroll"><table id="peakSummaryTable"></table></div>
+      </details>
+
+      <details class="panel details-panel">
+        <summary>Data Quality: Missing Intervals and Anomalies</summary>
+        <button onclick="loadDataQuality()">Refresh</button>
+        <h3>Missing Detector Intervals</h3>
+        <div class="table-scroll medium-scroll"><table id="missingTable"></table></div>
+        <h3>Detector Data Anomalies</h3>
+        <div class="table-scroll medium-scroll"><table id="anomalyTable"></table></div>
+      </details>
+
+      <details class="panel details-panel">
+        <summary>Signal Phase Analytics</summary>
+        <button onclick="loadSignalDurations()">Refresh durations</button>
+        <h3>Signal Phase Summary</h3>
+        <div class="table-scroll medium-scroll"><table id="signalSummaryTable"></table></div>
+        <h3>Signal Phase Duration Analytics</h3>
+        <div class="table-scroll medium-scroll"><table id="signalDurationTable"></table></div>
+      </details>
     </section>
 
-    <section class="grid two">
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Missing Detector Intervals</h2>
-          <button onclick="loadDataQuality()">Refresh</button>
-        </div>
-        <table id="missingTable"></table>
-      </div>
-      <div class="panel">
-        <div class="panel-title">
-          <h2>Detector Data Anomalies</h2>
-          <button onclick="loadDataQuality()">Refresh</button>
-        </div>
-        <table id="anomalyTable"></table>
-      </div>
-    </section>
-
-    <section class="panel">
+    <section class="panel compact-section" id="system">
       <div class="panel-title">
-        <h2>Signal Phase Duration Analytics</h2>
-        <button onclick="loadSignalDurations()">Refresh</button>
-      </div>
-      <p class="hint">Durations are calculated from consecutive events of the same intersection and phase. This is for analytics only and does not interact with the operational traffic control system.</p>
-      <table id="signalDurationTable"></table>
-    </section>
-
-
-
-    <section class="panel" id="phase3">
-      <div class="panel-title">
-        <h2>Phase 3: Traffic Flow Forecasting</h2>
-        <div class="button-row">
-          <button onclick="runForecast('historical_average')">Run historical-average forecast</button>
-          <button onclick="runForecast('gradient_boosting')">Run gradient-boosting forecast</button>
-          <a class="button-link" href="/api/export/forecast-results.csv">Export forecast CSV</a>
-        </div>
-      </div>
-      <p class="hint">Forecasts are generated for 15, 30, and 60 minutes ahead by approach. The historical-average model is transparent and robust for limited data; gradient boosting is used when enough records exist.</p>
-      <pre id="forecastRunResult"></pre>
-      <h3>Back-test Metrics</h3>
-      <table id="forecastEvaluationTable"></table>
-      <h3>Latest Forecast Results</h3>
-      <table id="forecastResultsTable"></table>
-    </section>
-
-    <section class="panel">
-      <div class="panel-title">
-        <h2>Phase 3: Signal Timing Recommendations</h2>
-        <div class="button-row">
-          <button onclick="generateRecommendations()">Generate recommendations</button>
-          <a class="button-link" href="/api/export/signal-recommendations.csv">Export recommendation CSV</a>
-        </div>
-      </div>
-      <p class="hint"><strong>Evaluation only:</strong> these recommendations are decision-support outputs and are not connected to GAM's operational traffic signal control system.</p>
-      <pre id="recommendationRunResult"></pre>
-      <table id="recommendationTable"></table>
-    </section>
-
-
-
-    <section class="panel phase4-panel" id="realtime">
-      <div class="panel-title">
-        <h2>RTSP Live Video Preview</h2>
-        <div class="button-row">
-          <button onclick="loadVideos()">Refresh sources</button>
-          <button onclick="stopLiveStream()">Stop live preview</button>
-        </div>
-      </div>
-      <p class="hint">Browsers cannot display RTSP directly, so the backend converts the selected RTSP/HTTP source into an MJPEG stream. This is for local PoC monitoring only.</p>
-      <div id="liveSourceInfo" class="hint">Register or select an RTSP source from the video table.</div>
-      <div class="live-video-box">
-        <img id="liveVideo" alt="Live video preview" />
-      </div>
-    </section>
-
-
-
-    <section class="panel phase4-panel" id="phase4">
-      <div class="panel-title">
-        <h2>Phase 4: Video Processing and Vehicle Detection</h2>
-        <div class="button-row">
-          <button onclick="loadVideos()">Refresh videos</button>
-          <a class="button-link" href="/api/export/vehicle-detections.csv">Export detections CSV</a>
-        </div>
-      </div>
-      <p class="hint">Phase 4 adds uploaded video processing, frame sampling, and a CPU-only OpenCV vehicle-candidate detector. This verifies the full video pipeline before YOLO/ONNX model weights are added for the next AI refinement.</p>
-      <table id="videoTable"></table>
-      <div class="grid two">
-        <div>
-          <h3>Sampled Frames</h3>
-          <div id="frameGallery" class="frame-gallery"></div>
-        </div>
-        <div>
-          <h3>Detection Summary</h3>
-          <table id="videoDetectionSummaryTable"></table>
-        </div>
-      </div>
-      <h3>Latest Vehicle-Candidate Detections</h3>
-      <table id="vehicleDetectionTable"></table>
-      <pre id="videoProcessResult"></pre>
-    </section>
-
-
-
-    <section class="panel phase5-panel" id="phase5">
-      <div class="panel-title">
-        <h2>Phase 5: Incident Detection and Human Review</h2>
-        <div class="button-row">
-          <button onclick="detectIncidentsForSelectedVideo()">Detect incident candidates</button>
-          <button onclick="loadIncidents()">Refresh incidents</button>
-          <a class="button-link" href="/api/export/incidents.csv">Export incidents CSV</a>
-        </div>
-      </div>
-      <p class="hint">Phase 5 converts Phase 4 vehicle-candidate detections into explainable incident candidates: congestion events and possible stalled vehicles. All events remain <strong>unreviewed</strong> until a GAM user marks them as confirmed, false positive, or uncertain.</p>
-      <pre id="incidentRunResult"></pre>
-      <div class="grid two">
-        <div>
-          <h3>Incident Summary</h3>
-          <table id="incidentSummaryTable"></table>
-        </div>
-        <div>
-          <h3>Incident Snapshot</h3>
-          <div id="incidentSnapshot" class="snapshot-box"><p class="hint">Click “View” in the incident table to show a snapshot.</p></div>
-        </div>
-      </div>
-      <h3>Incident Event Review</h3>
-      <table id="incidentTable"></table>
-    </section>
-
-    <section class="panel">
-      <div class="panel-title">
-        <h2>Ingestion Files</h2>
+        <h2>Ingestion Files and System Records</h2>
         <button onclick="loadFiles()">Refresh</button>
       </div>
-      <table id="filesTable"></table>
+      <div class="table-scroll large-scroll"><table id="filesTable"></table></div>
     </section>
   </main>
 
