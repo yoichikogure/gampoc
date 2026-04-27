@@ -4,7 +4,7 @@ This repository contains a Docker-portable, open-source prototype application fo
 
 The application demonstrates a local web dashboard for ingesting traffic data, reviewing historical analytics, running short-term traffic forecasts, generating evaluation-only signal timing recommendations, processing historical traffic videos, reviewing incident candidates, and previewing real-time RTSP/HTTP video with a lightweight live AI overlay.
 
-This package is intended to be a **shareable achievement version** of the phase-based development completed so far.
+This package is intended to be a **demonstrative prototype** of the PoC.
 
 ---
 
